@@ -55,6 +55,7 @@ from . import diskimage as _disk
 from . import manifest as _manifest
 from . import verify as _verify
 from .artefacts import browser as _browser
+from .artefacts import mobile as _mobile
 from .case import Case
 from .errors import ForensicsError
 from .extract import extract_file
@@ -161,6 +162,25 @@ def cmd_browser(args) -> int:
     summary = _browser.extract_browser_artefacts(
         case, args.evidence, all_sqlite=args.all_sqlite, progress=_progress)
     _print(summary.as_dict())
+    return 0
+
+
+def cmd_mobile(args) -> int:
+    case = _open(args)
+    summary = _mobile.analyse_evidence(case, args.evidence, progress=_progress)
+    _print(summary.as_dict())
+    return 0
+
+
+def cmd_mobile_artefacts(args) -> int:
+    case = _open(args)
+    rows, total = _mobile.list_mobile(case, args.evidence, artefact=args.kind,
+                                      search=args.search, limit=args.limit)
+    for r in rows:
+        print(f"{r['at_utc'] or '(no time)':28} {r['artefact']:10} "
+              f"{r['provenance']:11} {r['browser']:16} "
+              f"{r['url'] or r['title']} {r['value']}".rstrip())
+    print(f"\n{len(rows)} shown of {total}")
     return 0
 
 
@@ -423,6 +443,14 @@ def build_parser() -> argparse.ArgumentParser:
     br = with_case("browser", cmd_browser, "parse browser databases",
                    evidence=True)
     br.add_argument("--all-sqlite", action="store_true")
+    with_case("mobile", cmd_mobile,
+              "read an iOS backup: device, encryption, file map, artefacts",
+              evidence=True)
+    ma = with_case("mobile-artefacts", cmd_mobile_artefacts,
+                   "list parsed mobile artefacts", evidence=True)
+    ma.add_argument("--kind", default="", choices=["", *_mobile.ARTEFACT_KINDS])
+    ma.add_argument("--search", default="")
+    ma.add_argument("--limit", type=int, default=200)
     art = with_case("artefacts", cmd_artefacts, "list parsed artefacts",
                     evidence=True)
     art.add_argument("--kind", default="", choices=["", *_browser.ARTEFACT_KINDS])

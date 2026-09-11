@@ -36,11 +36,16 @@ and which routes the licence rule excludes.
   Apache-2.0 like CyberWolf and the Writing Workshop. See `LICENSE`.
 - **In ATK the workspace sits immediately after Image Analysis**, ninth in
   the rail.
-- **Nothing that restricts commercial use** (§1.1, 2026-09-11). Third-party
-  code must be under a permissive licence, and so must everything it pulls in.
-  Every library this plan first named for E01, virtual disks, The Sleuth Kit,
-  shadow copies, ESE, APFS and memory fails that: E01, virtual disks, shadow
-  copies and ESE become native, and memory analysis is deferred.
+- **Nothing that restricts commercial use** (§1.1, 2026-09-11, corrected the
+  same day). Any third-party code — and everything it pulls in or bundles —
+  must permit commercial use of this closed product: permissive, or weak /
+  file-level copyleft (LGPL, MPL, EPL, and the IPL/CPL over the Sleuth Kit
+  core). Whole-program copyleft (GPL, AGPL, the Volatility Software License)
+  and non-commercial licences are excluded. So the libyal libraries and pytsk3
+  all pass; the engineering default is still native for the offline property,
+  so E01, virtual disks, shadow copies and ESE are planned native with the
+  library named as the alternative, APFS is the one library route, and memory
+  analysis is deferred (Volatility 3 and MemProcFS fail the rule).
 
 **Built beyond the letter of the plan, because the spine needed it:** a
 hash-chained custody log with an anchor kept outside the case (ATK's case
@@ -126,28 +131,28 @@ against the Midas BLUE layouts and the stdlib OSM PBF reader.
 |---|---|---|
 | Hashing MD5/SHA-1/SHA-256 | **native** (`hashlib`) | trivial, and the foundation |
 | RAW/DD image reading | **native** | it is a byte stream |
-| E01 / EWF reading | **native** (`zlib`) | the format is documented and its chunks are zlib-compressed. **pyewf (libewf) is LGPL-3.0 and fails the licence rule** |
-| AFF4 | **native**, low priority | rare in practice. pyaff4 itself is Apache-2.0, but its dependency tree has not been checked, and the engine takes no dependencies |
-| VHD/VHDX/VMDK | **native** | a fixed VHD is read already; the rest follow published specifications. **pyvhdi and pyvmdk (libyal) are LGPL-3.0 and fail the licence rule** — the "Apache-2.0-ish" this row once said was wrong |
+| E01 / EWF reading | **native** (`zlib`) by default | documented, chunks are zlib-compressed. pyewf (libewf) is LGPL — licence-permitted as an alternative; native chosen for the offline property |
+| AFF4 | **native**, low priority | rare in practice. pyaff4 is Apache-2.0 (permitted), but the engine avoids dependencies by default |
+| VHD/VHDX/VMDK | **native** by default | a fixed VHD is read already; the rest follow published specifications. pyvhdi/pyvmdk (libyal, LGPL) are licence-permitted alternatives — the "Apache-2.0-ish" this row once said was wrong |
 | Partition tables (MBR/GPT) | **native** | documented, small |
 | NTFS: `$MFT`, `$USNJrnl`, ADS | **native** | the formats are published and stable; this is exactly the kind of parser this project writes well |
 | FAT/exFAT | **native** | small |
 | Ext4 inodes, orphan recovery | **native**, non-trivial | superblock + inode tables are documented; extent trees are the work |
-| APFS | **defer**; native when it comes | genuinely hard; **defer, and say so** rather than half-support it. pyfsapfs is LGPL-3.0 and fails the licence rule |
-| Full TSK coverage | **excluded** | pytsk3's bindings are Apache-2.0, but they build in The Sleuth Kit, whose IPL/CPL terms are copyleft. File systems are added natively, one at a time |
+| APFS | **pyfsapfs** (LGPL, permitted) when built; deferred for now | genuinely hard; the one place a permitted library is the plan rather than a native parser |
+| Full TSK coverage | **native**, one filesystem at a time | pytsk3 (Apache-2.0 over an IPL/CPL core) is licence-permitted as a breadth fallback |
 | File carving by signature | **native** | a signature table plus a scanner; ATK should own this |
-| Volume Shadow Copies | **native** | offline, from an image. **pyvshadow is LGPL-3.0 and fails the licence rule** |
+| Volume Shadow Copies | **native** | offline, from an image. pyvshadow (LGPL) is a licence-permitted alternative |
 | Registry hives | **native** | the hive format is well documented. `python-registry` is Apache-2.0 from 0.2.0 (GPL-3.0 before), but the engine takes no dependencies |
 | Prefetch | **native** | Win10+ MAM compression needs `RtlDecompressBufferEx` — available on Windows through `ctypes`, no third party |
 | LNK / Jump Lists | **native** | Shell Link + OLE compound file; documented |
 | Amcache / Shimcache | **native** (they are registry/hive) | |
 | Browser artefacts | **native** (`sqlite3` stdlib) | Chrome/Firefox/Edge are SQLite; this is the cheapest high-value win in the whole list |
-| ESE databases (SRUM, Windows Search) | **native** | documented, and a real piece of work. **pyesedb is LGPL-3.0 and fails the licence rule** |
+| ESE databases (SRUM, Windows Search) | **native** | documented, and a real piece of work. pyesedb (LGPL) is a licence-permitted alternative |
 | EXIF / document metadata | **native** (PIL + existing `forensics.py`) | already partly built |
 | Steganalysis (LSB, chi-square, RS) | **native** | `forensics.py` already does ELA and noise fingerprinting; this is an extension of work that exists |
 | OCR | **existing `ocr.py`** | already in ATK |
 | Audio transcription | **existing Whisper path** | already in ATK |
-| Memory (RAM) analysis | **deferred** | **no route passes the licence rule**: Volatility 3 (its own copyleft licence) and MemProcFS (AGPL-3.0) both fail. Native, if it earns its place after Phase 4 — with its own symbol-table problem |
+| Memory (RAM) analysis | **deferred** | **no licence-permitted route**: Volatility 3 (its own copyleft licence) and MemProcFS (AGPL-3.0) both reach our source. Native, if it earns its place after Phase 4 — with its own symbol-table problem |
 | Super timeline | **native** merge | the merge is easy; the parsers above are the work |
 | Encrypted volume *detection* | **native** | signatures for BitLocker/LUKS/FileVault are identifiable |
 | Encrypted volume *decryption* | **out of scope for v1** | key extraction from hibernation/memory is a real capability and a real rabbit hole; do not promise it in the same breath as detection |
@@ -160,54 +165,72 @@ it passes §1.1 — and none of the ones this table first named does.
 ### 1.1 The licence rule — nothing that restricts commercial use
 
 **Bill, 2026-09-11: nothing that will restrict commercial use.** Said at the
-start, so that nothing is built on a library that has to be torn out later.
-As applied to this repository:
+start, so nothing is built on a library that has to be torn out later.
+Corrected the same day: an earlier draft of this section read the rule as
+"permissive only" and put LGPL on the excluded side. **That was wrong — LGPL
+does not restrict commercial use.** As the rule actually applies:
 
-- **Permissive licences only**, for anything the engine would import, bundle
-  or require: MIT, BSD, Apache-2.0, ISC, PSF, zlib, CC0 and their kin. The list
-  is `PERMISSIVE_LICENCES` in `forensics_workshop/capabilities.py`, and it is
-  an allowlist: a licence nobody has checked is refused, not waved through.
-- **Excluded: copyleft of every strength, and anything non-commercial** — GPL,
-  AGPL, LGPL, MPL, EPL, the IBM and Common Public Licences, the Volatility
-  Software License, PolyForm Noncommercial, CC BY-NC, and source-available
-  terms.
-- **LGPL is on the excluded side deliberately.** It does allow commercial use,
-  but on conditions: the user must be able to replace the library, whoever
-  ships it must offer its source, and LGPL-3.0 requires the product's terms to
-  permit reverse engineering to debug such a replacement. A closed, all-rights-
-  reserved product would carry those conditions for as long as it used the
-  library. Keeping them out is cheaper than managing them.
-- **The whole tree counts.** A permissive package that pulls in or builds in a
-  copyleft one fails; pytsk3 is the example.
+- **Two tiers pass**, for anything the engine would import, bundle or require,
+  its dependencies included:
+  - *permissive* (MIT, BSD, Apache-2.0, ISC, PSF, zlib, CC0 …) — keep the
+    notice; no effect on our own code;
+  - *weak / file-level copyleft* (LGPL-2.1/3.0, MPL-2.0, EPL, and the IPL/CPL
+    that cover the Sleuth Kit core) — commercial use of a closed product is
+    fine. The cost is shipping the library's licence text, publishing any
+    change you make **to that library** (never your own code), and leaving it
+    replaceable — automatic in Python, where imports are dynamic and the user
+    can swap in their own build.
+
+  The allowlist is `PERMISSIVE_LICENCES | RECIPROCAL_LICENCES` in
+  `capabilities.py`; a licence nobody has checked is refused, not waved through.
+- **Excluded: whole-program copyleft and non-commercial.** GPL, AGPL, and the
+  Volatility Software License — which requires publishing the source of
+  software built *with* it — would force this engine open. PolyForm-NC,
+  CC BY-NC, BUSL and SSPL restrict commercial use outright.
+- **The whole tree counts.** A permissive package that bundles a copyleft one
+  carries it. pytsk3 is the case, and it passes only because the Sleuth Kit's
+  IPL/CPL are themselves weak copyleft.
+- **Passing the rule is not the same as being used.** The engineering default
+  is native and standard-library-only: the engine runs in a bare interpreter,
+  installs nothing and bundles no licence texts. A permitted library is reached
+  for only where a native parser would be a poor use of time.
 - **Formats are implemented from their documentation**, never by copying or
-  translating code from an excluded project.
+  translating code from a GPL/AGPL project whose terms would reach this code.
 - **An examiner's own tools are not dependencies.** Converting an E01 to raw
   with FTK Imager or ewfexport before registering it is the examiner's step;
   nothing of those tools ships with the workshop or is needed by it.
 
-What the rule changed:
+Where each library the plan first named now stands:
 
-| route this plan named | licence | now |
-|---|---|---|
-| pyewf (libewf) | LGPL-3.0-or-later | E01 native |
-| pyvhdi, pyvmdk (libyal) | LGPL-3.0-or-later | VHDX, VMDK and dynamic VHD native |
-| pytsk3 (The Sleuth Kit) | Apache-2.0 bindings over an IPL-1.0 / CPL-1.0 core | file systems native, one at a time |
-| pyvshadow (libvshadow) | LGPL-3.0-or-later | Volume Shadow Copies native (Phase 4) |
-| pyesedb (libesedb) | LGPL-3.0-or-later | ESE native (Phase 4) |
-| pyfsapfs (libfsapfs) | LGPL-3.0-or-later | APFS still deferred; native when it comes |
-| Volatility 3 | Volatility Software License 1.0 | memory analysis deferred |
-| MemProcFS; Fox-IT's dissect.evidence | AGPL-3.0 | not used, and not a source to copy from |
+| library | licence | rule | plan |
+|---|---|---|---|
+| pyewf (libewf) | LGPL-3.0-or-later | **permitted** | E01 native by default; library the alternative |
+| pyvhdi, pyvmdk (libyal) | LGPL-3.0-or-later | **permitted** | VHDX/VMDK/dynamic VHD native by default |
+| pytsk3 (Sleuth Kit) | Apache-2.0 AND IPL-1.0 AND CPL-1.0 | **permitted** | filesystems native, one at a time; library a breadth fallback |
+| pyvshadow (libvshadow) | LGPL-3.0-or-later | **permitted** | Volume Shadow Copies native (Phase 4) |
+| pyesedb (libesedb) | LGPL-3.0-or-later | **permitted** | ESE native (Phase 4) |
+| pyfsapfs (libfsapfs) | LGPL-3.0-or-later | **permitted** | APFS — the one place the library IS the plan, when built |
+| Volatility 3 | Volatility Software License 1.0 | **excluded** | memory deferred |
+| MemProcFS; Fox-IT dissect.evidence | AGPL-3.0 | **excluded** | not used, and not a source to copy from |
 
-Each library is an **excluded** row in the capability table with the licence
-that fails, so the reason travels with the code and ATK's Capabilities page
-shows it. `tests/test_capabilities_packaging.py` holds every other third-party
-row to the allowlist, and the table shows a failing row as excluded even if
-someone adds it as planned.
+Only the two excluded rows appear as **excluded** in the capability table,
+each with the licence that fails; `tests/test_capabilities_packaging.py` holds
+every third-party row to the allowlist and shows a failing row as excluded even
+if someone adds it as planned.
+
+**One thing the rule does not decide: FDE decryption.** Detecting an encrypted
+volume is native and available. Decrypting one, given the key, needs a
+symmetric cipher (AES-XTS) and a KDF the standard library does not provide. The
+permissive crypto libraries — `cryptography` (Apache-2.0/BSD) and
+`pycryptodome` (BSD/public-domain) — pass the rule, so this is not a licence
+question; it is the separate decision of whether to take the engine's first
+dependency and give up the bare-interpreter property.
 
 **Beyond this repository.** Phase 3 leans on ATK's own components — OCR,
-Whisper, Pillow — and ATK has dependencies of its own under the same question:
-PySide6, which draws every ATK page, is LGPL-3.0. That review belongs to ATK,
-and Phase 3 should not build on a component until it has passed it.
+Whisper, Pillow — and ATK has dependencies under the same question: PySide6,
+which draws every ATK page, is LGPL-3.0 (permitted, with the same
+notice/replaceability cost); the bundled FFmpeg builds are GPL-3.0 (a binary
+shipped, not a library linked — a real question). That review belongs to ATK.
 
 ---
 
@@ -338,8 +361,8 @@ RAW/DD and partition parsing, NTFS `$MFT` and `$USNJrnl`, ADS enumeration,
 deleted-entry recovery, **signature carving with preview**, slack and
 unallocated scraping, timestomp detection (`$FILE_NAME` vs
 `$STANDARD_INFORMATION`). E01 and the virtual disk containers (VHDX, VMDK,
-dynamic VHD) **natively** — the libraries that read them fail the licence rule
-(§1.1) — and not built yet.
+dynamic VHD) **natively by default** — the libraries that read them are
+licence-permitted (§1.1) but native is the choice — and not built yet.
 
 ### Phase 3 — DOMEX and hunts
 
@@ -348,6 +371,13 @@ extending the existing `forensics.py`, Whisper on every audio and video file,
 and the **hunt engine wired across all of them**. This is the phase Bill
 described first and it is third on purpose: hunts over an unverified,
 un-custodied corpus produce findings nobody can stand behind.
+
+**Mobile image analysis** (Bill, 2026-09-11) also lands here: comprehensive
+native analysis of an already-extracted image — **not acquisition**, which
+needs physical-device protocols and stays out of scope. It is large enough to
+have its own spec: **see §9**. Increments 1-2 (the iOS backup file map + the
+messages/calls/contacts/Safari parsers) are built; §9 is the full plan and the
+remaining increment order.
 
 **Audio, per his note**: Whisper first, transcript into the hunt corpus, and
 **the language tagged by task, not by detected language** — the subtitles path
@@ -466,3 +496,126 @@ Digital-Forensics-Workshop/
 
 That is a standing, testable, honest tool with no third-party dependency and no
 licence question — and every later phase plugs into it rather than reshaping it.
+
+---
+
+## 9. Mobile analysis — the comprehensive build plan
+
+Analysis of an already-extracted mobile image. **Never acquisition** (physical-
+device protocols and exploits — out of scope). Bill, 2026-09-11: "as
+comprehensive and capable as possible," built native, in tested increments.
+
+**The dimension the first cut missed: the EXTRACTION TYPE.** The same phone
+yields very different data by how it was extracted, and the highest-value
+artefacts are not in a backup at all. The engine identifies what it was handed
+and routes accordingly.
+
+### 9.1 Scope (Bill's decisions, 2026-09-11)
+
+- **Input types: backups + full-filesystem file trees.** iOS iTunes/Finder
+  backups (encrypted and not) and full-filesystem extractions delivered as a
+  file tree (tar/zip of real paths); Android ADB backups and file-tree dumps.
+  **Not** raw physical images (APFS/ext4/f2fs partitions) yet — those ride on
+  the Phase-2 filesystem work and are a later addition.
+- **Encrypted backups: detect now, decrypt with a PERMITTED crypto dependency.**
+  `pycryptodome` (BSD/public-domain) or `cryptography` (Apache/BSD) — both pass
+  the §1.1 licence rule. Design: an **optional** dependency, imported lazily
+  only in the decryption path, declared as a `pyproject` extra. The engine still
+  imports and runs standard-library-only in a bare interpreter; decryption
+  reports "available" only when the library is present, degrading honestly when
+  it is not. This is the engine's first third-party dependency, and it is
+  optional by construction so the offline/bare-interpreter property survives
+  everywhere except the one feature that needs a cipher. `test_isolation` gains
+  a single named exception for the guarded optional import.
+- **Third-party apps: a pluggable registry + a starter set.** Register a parser
+  by path + schema signature; starter set WhatsApp, Signal, Telegram, Snapchat,
+  Instagram, Facebook Messenger, Google Maps. Others are added as plugins
+  without touching the core.
+
+### 9.2 Cross-cutting plumbing (correctness depends on it)
+
+- **NSKeyedArchiver / `attributedBody`.** On iOS 12+ a message's `text` column is
+  often NULL and the real text is in `attributedBody` as an NSKeyedArchiver
+  `NSAttributedString`. **The increment-2 SMS parser misses this — a correctness
+  gap to close first.** A native NSKeyedArchiver decoder also unlocks the
+  Manifest `file` blob, many plists, and Notes bodies.
+- **SQLite deleted-record recovery** (free pages, WAL frames, journals) — "the
+  deleted texts." A distinct, reusable capability that also serves the browser
+  and disk parsers.
+- **Protobuf** — Android `usagestats`, iOS Biome/SEGB, Google/app payloads. A
+  small native reader; no dependency.
+- **The epoch zoo + timezone** — Cocoa (s/ns), Unix (s/ms/µs), WebKit, FILETIME
+  are handled; add **Google µs-since-1970**. Every timestamp keeps raw + decoded
+  + epoch (house rule).
+- **Encryption detection everywhere**, decryption where a key/password is given:
+  encrypted iOS backups (keybag → per-file AES), Android FBE (detect; decrypt
+  only with keys), WhatsApp `crypt15`, encrypted app DBs.
+
+### 9.3 iOS artefact catalogue   (B = in a backup, F = full-filesystem only)
+
+- **Comms:** Messages incl. attachments, group chats, reactions, edited/unsent
+  (iOS 16+) (B); Call history + FaceTime (B); Voicemail + audio (B); Mail (F).
+- **PIM:** Contacts (B, built), Calendar, Reminders, Notes (`NoteStore` /
+  `notes.sqlite`, gzip'd protobuf bodies) (B).
+- **Web:** Safari history (B, built) + bookmarks (`Bookmarks.db`), tabs
+  (`BrowserState.db`), downloads; other browsers (F).
+- **Location & pattern-of-life (mostly F):** `knowledgeC.db` (app usage, device
+  lock/unlock, now-playing, notifications — the crown jewel), `CurrentPowerLog.
+  PLSQL`, location caches (`Cache.sqlite`, `cache_encryptedB.db`), `routined`,
+  `interactionC.db`.
+- **Media:** `Photos.sqlite` (Camera Roll: GPS, faces, albums) + EXIF/GPS on files.
+- **Device/network:** `preferences.plist`, `CellularUsage.db`, `DataUsage.sqlite`
+  / `netusage.sqlite`, Wi-Fi (`com.apple.wifi.known-networks.plist`), Bluetooth
+  (`…ledevices.paired.db`), `applicationState.db`, `TCC.db` (permissions),
+  Screen Time, HomeKit.
+- **Health** (encrypted backup / F): `healthdb_secure.sqlite`.
+- **Keychain** (encrypted backup / F): passwords, tokens, Wi-Fi PSKs.
+
+### 9.4 Android artefact catalogue
+
+- SMS/MMS (`mmssms.db`; Messages-by-Google `bugle_db`), Calls + Contacts
+  (`contacts2.db`), Accounts (`accounts_ce/de.db`).
+- **Chrome reuses the existing browser parser**; plus Samsung Internet.
+- Wi-Fi (`WifiConfigStore.xml`, PSKs), Bluetooth (`bt_config.conf`), Downloads,
+  Calendar, MediaStore (`external.db` — paths/dates/GPS), app usage
+  (`usagestats`, protobuf), Google location/Maps if present.
+- Per-app `/data/data/<pkg>` databases + `shared_prefs`.
+- Containers: ADB `.ab` (TAR, deflate, optional password), sparse `.img`, TWRP.
+
+### 9.5 The ATK Mobile page
+
+A new **Mobile** sub-tab in the Forensics workspace, under the DFW house rules
+(evidence outside ATK; preview writes nothing; recovery needs a reason; the
+"analysis of an extracted image, NOT acquisition" notice; locked/encrypted state
+shown). Views: **device summary** (model, OS, serial, IMEI, number, last backup,
+encryption state, extraction type, app count); a threaded **conversation** view;
+a **call log**; a **contacts** list; a **map** for locations; a unified
+**timeline**; filter by type, search, sort by time. Every row shows provenance
+(db / wal / recovered) and its source DB + raw-and-decoded timestamp. Driven
+through the fake-Qt harness + a real-Qt build test.
+
+### 9.6 Validation
+
+Hold the parsers to **real public reference images**, not only the synthetic
+builder: Josh Hickman's images on Digital Corpora — **iOS 13-17** and
+**Android 7-14** — are the standard corpus, and are how the `attributedBody`-
+class surprises get caught.
+
+### 9.7 Increment order
+
+1. **Built:** iOS backup file map (spine); messages/calls/contacts/Safari parsers.
+2. NSKeyedArchiver decoder + fix `attributedBody`; MMS/attachments; the rest of
+   the core iOS *backup* artefacts (Notes, Calendar, Reminders, Voicemail,
+   bookmarks, Wi-Fi/Bluetooth, `applicationState`/`TCC`, `DataUsage`).
+3. Extraction-type detection + full-filesystem *file-tree* routing; the
+   pattern-of-life goldmine (`knowledgeC`, powerlog, location caches,
+   `Photos.sqlite`, `interactionC`) + protobuf/SEGB/Biome basics.
+4. Encrypted iOS backup decryption (optional `pycryptodome`): keybag → per-file
+   AES; then keychain and Health.
+5. SQLite deleted-record recovery (shared capability).
+6. Android: ADB backup + file-tree; `mmssms`/`contacts2`/accounts/Wi-Fi/
+   Bluetooth/MediaStore/`usagestats`; Chrome via the existing parser.
+7. Third-party registry + starter set (WhatsApp/Signal/Telegram/…).
+8. The ATK Mobile page (can slot in once the core iOS artefacts are solid).
+
+Validation against the public images runs throughout, not at the end.

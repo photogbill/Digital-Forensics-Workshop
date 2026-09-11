@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 UTC = timezone.utc
 UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 WEBKIT_EPOCH = datetime(1601, 1, 1, tzinfo=UTC)
+COCOA_EPOCH = datetime(2001, 1, 1, tzinfo=UTC)   # Apple "Mac absolute time"
 
 #: name -> (epoch, the unit one raw integer counts)
 EPOCHS = {
@@ -28,6 +29,8 @@ EPOCHS = {
     "unix_ms": (UNIX_EPOCH, "milliseconds"),
     "unix_ns": (UNIX_EPOCH, "nanoseconds"),        # os.stat *_ns
     "filetime": (WEBKIT_EPOCH, "hundred-nanoseconds"),  # NTFS, USN, Win32
+    "cocoa_s": (COCOA_EPOCH, "seconds"),           # Core Data, AddressBook, Safari
+    "cocoa_ns": (COCOA_EPOCH, "nanoseconds"),      # iOS 11+ sms.db date
 }
 
 
@@ -132,3 +135,20 @@ def infer_unix_unit(raw) -> str | None:
     if value <= 0:
         return None
     return "unix_ms" if value > 100_000_000_000 else "unix_s"
+
+
+def infer_cocoa_unit(raw) -> str | None:
+    """iOS `sms.db` stored `date` in seconds since 2001 until iOS 11, then
+    switched to nanoseconds. Returns `cocoa_s` or `cocoa_ns`, or None.
+
+    An INFERENCE, recorded as one: a seconds count in this century is ~10^8–10^9,
+    a nanoseconds count ~10^17, so anything past the year-5000-ish seconds
+    ceiling is read as nanoseconds. Callers keep the raw value beside it.
+    """
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    return "cocoa_ns" if value > 100_000_000_000 else "cocoa_s"

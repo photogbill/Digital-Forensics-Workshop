@@ -13,9 +13,9 @@ metadata of their own. Read as raw bytes they parse as a disk full of
 garbage — partition tables that are not there, volumes at the wrong offsets
 — and every result is wrong while looking right. So an image is identified
 by its signature before it is accepted, and a container this engine cannot
-read is REFUSED with the reason. E01 in particular waits on a native reader:
-the library that reads it, libewf, fails the licence rule (FORENSICS_PLAN.md
-§1.1).
+read is REFUSED with the reason. E01 in particular waits on a native reader;
+the library that reads it, libewf (pyewf), is licence-permitted, but native
+is the default here for the offline property (FORENSICS_PLAN.md §1.1).
 
 A fixed-size VHD is the exception that is honest to accept: it IS the raw
 disk, followed by a 512-byte footer. The footer is found, excluded from the
@@ -45,13 +45,12 @@ from .hashing import CHUNK, Hasher, Hashes
 #: Signatures of containers that are not raw disks, and why each is refused.
 CONTAINERS = {
     "ewf": "an EnCase E01 image — compressed chunks with their own metadata. "
-           "This version cannot read it: a native reader is planned, and the "
-           "library route (libewf/pyewf, LGPL-3.0) fails the licence rule in "
-           "FORENSICS_PLAN.md §1.1. Convert it to raw with a trusted tool "
+           "This version cannot read it yet; a native reader is planned "
+           "(FORENSICS_PLAN.md §1.1). Convert it to raw with a trusted tool "
            "(FTK Imager, ewfexport) and register the raw image, recording "
            "that conversion in your notes.",
-    "ewf2": "an EnCase Ex01 image. See E01: not readable in this version, "
-            "and the library route fails the licence rule.",
+    "ewf2": "an EnCase Ex01 image. See E01: not readable in this version; a "
+            "native reader is planned.",
     "aff": "an AFF image. Not readable in this version.",
     "aff4": "an AFF4 image. Not readable in this version.",
     "vhdx": "a Hyper-V VHDX disk — a block-allocation container, not raw.",

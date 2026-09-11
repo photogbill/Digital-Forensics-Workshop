@@ -91,6 +91,8 @@ WRITERS = {
     "extract:copy_stream_to_case": "case",
     "index:connect": "case",
     "artefacts.browser:_open_working_copy": "case",
+    "artefacts.mobile:_open_working_copy": "case",
+    "artefacts.mobile:_write_file_map": "case",
 }
 
 

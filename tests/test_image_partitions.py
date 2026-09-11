@@ -92,7 +92,7 @@ class SplitImages(TempDirCase):
             with self.assertRaises(EvidenceError, msg=name) as ctx:
                 image.describe(image.discover_segments(path))
             self.assertIn("not", str(ctx.exception).lower())
-        with self.assertRaisesRegex(EvidenceError, "licence"):
+        with self.assertRaisesRegex(EvidenceError, "native reader is planned"):
             image.describe([self.tmp / "e.E01"])
 
     def test_a_fixed_vhd_is_its_disk_plus_a_footer(self):

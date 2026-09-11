@@ -44,7 +44,9 @@ class Capabilities(unittest.TestCase):
             if c.how == "third-party" and c.package:
                 self.assertTrue(c.licence, c)
                 self.assertIn(c.package_present, (True, False), c)
-        self.assertEqual(self.rows["pyewf"].licence, "LGPL-3.0-or-later")
+        self.assertEqual(self.rows["apfs"].licence, "LGPL-3.0-or-later")
+        self.assertEqual(self.rows["volatility3"].licence,
+                         "LicenseRef-Volatility-Software-License-1.0")
 
     def test_deferred_and_out_of_scope_are_said_out_loud(self):
         self.assertEqual(self.rows["apfs"].status, "deferred")
@@ -77,27 +79,34 @@ class Capabilities(unittest.TestCase):
 class LicenceRule(unittest.TestCase):
     """Bill, 2026-09-11: nothing that restricts commercial use.
 
-    Said at the start so that nothing gets built on a library that has to be
-    torn out later. FORENSICS_PLAN.md §1.1 is the account; this holds the
-    table to it."""
+    Corrected the same day: LGPL and other weak/file-level copyleft PERMIT
+    commercial use of a closed product (the cost is a bundled notice and
+    leaving the library replaceable), so they pass. Only whole-program
+    copyleft (GPL, AGPL, the Volatility Software License) and non-commercial
+    licences are excluded. FORENSICS_PLAN.md §1.1 is the account; this holds
+    the table to it."""
 
     def setUp(self):
         self.rows = {c.id: c for c in capabilities.capabilities()}
 
-    def test_the_rule_is_an_allowlist_of_permissive_licences(self):
+    def test_the_rule_permits_commercial_use_including_weak_copyleft(self):
         permits = capabilities.licence_permits
         for ok in ("MIT", "Apache-2.0", "BSD-3-Clause", "PSF-2.0", "Zlib",
-                   "MIT OR Apache-2.0", "LGPL-3.0-or-later OR MIT"):
+                   "LGPL-3.0-or-later", "LGPL-2.1-only", "MPL-2.0", "EPL-2.0",
+                   "IPL-1.0", "CPL-1.0", "Apache-2.0 AND IPL-1.0 AND CPL-1.0",
+                   "MIT OR Apache-2.0", "GPL-3.0-only OR MIT"):
             self.assertTrue(permits(ok), ok)
-        for bad in ("", "GPL-3.0-only", "LGPL-3.0-or-later", "LGPL-2.1-only",
-                    "AGPL-3.0", "MPL-2.0", "EPL-2.0", "IPL-1.0", "CPL-1.0",
+        for bad in ("", "GPL-3.0-only", "GPL-2.0-or-later", "AGPL-3.0",
+                    "LicenseRef-Volatility-Software-License-1.0", "SSPL-1.0",
                     "LicenseRef-PolyForm-Noncommercial-1.0.0", "CC-BY-NC-4.0",
-                    "LicenseRef-Volatility-Software-License-1.0",
-                    "Apache-2.0 AND IPL-1.0", "(MIT)", "a licence nobody read"):
+                    "Apache-2.0 AND GPL-3.0-only", "(MIT)", "a licence nobody read"):
             self.assertFalse(permits(bad), bad)
-        for name in capabilities.PERMISSIVE_LICENCES:
-            self.assertNotRegex(name, r"GPL|MPL|EPL|CPL|IPL|NC|Noncommercial",
-                                "copyleft or non-commercial on the allowlist")
+        # weak copyleft is on the allowlist; whole-program copyleft is not
+        self.assertLessEqual({"LGPL-3.0-or-later", "MPL-2.0", "IPL-1.0"},
+                             capabilities.PERMITTED_LICENCES)
+        for forbidden in ("GPL-3.0-only", "AGPL-3.0", "SSPL-1.0",
+                          "LicenseRef-Volatility-Software-License-1.0"):
+            self.assertNotIn(forbidden, capabilities.PERMITTED_LICENCES)
 
     def test_no_row_as_written_offers_a_route_that_fails_the_rule(self):
         # The written table, not the computed one: capabilities() also
@@ -120,25 +129,32 @@ class LicenceRule(unittest.TestCase):
         self.assertEqual(c.status, "excluded")
         self.assertIn("GPL-3.0-or-later", c.note)
 
-    def test_the_libraries_the_plan_first_named_are_excluded(self):
-        for package in ("pyewf", "pyvhdi", "pytsk3", "pyvshadow", "pyesedb",
-                        "pyfsapfs", "volatility3", "memprocfs"):
-            statuses = [c.status for c in self.rows.values()
-                        if c.package == package]
-            self.assertEqual(statuses, ["excluded"], package)
+    def test_only_whole_program_copyleft_is_excluded(self):
+        excluded = {c.id: c for c in self.rows.values()
+                    if c.status == "excluded"}
+        self.assertEqual(set(excluded), {"volatility3", "memprocfs"},
+                         "only strong copyleft is excluded now")
+        # the weak-copyleft libraries the plan first named all PASS the rule
+        for licence in ("LGPL-3.0-or-later", "Apache-2.0 AND IPL-1.0 AND CPL-1.0"):
+            self.assertTrue(capabilities.licence_permits(licence), licence)
 
-    def test_what_they_would_have_read_is_native_or_deferred(self):
+    def test_what_they_would_have_read_is_native_by_default(self):
+        # native default; a permitted library named in the note, not used
         for cid in ("ewf", "vdisk", "vss", "ese"):
             self.assertEqual((self.rows[cid].how, self.rows[cid].status),
                              ("native", "planned"), cid)
-        for cid in ("memory", "apfs"):
-            self.assertEqual((self.rows[cid].how, self.rows[cid].status),
-                             ("native", "deferred"), cid)
+        self.assertEqual((self.rows["memory"].how, self.rows["memory"].status),
+                         ("native", "deferred"))
+        # APFS is the one place a permitted library IS the plan
+        apfs = self.rows["apfs"]
+        self.assertEqual((apfs.how, apfs.status, apfs.package),
+                         ("third-party", "deferred", "pyfsapfs"))
+        self.assertTrue(capabilities.licence_permits(apfs.licence))
 
-    def test_the_e01_refusal_gives_the_rule_not_an_open_question(self):
+    def test_the_e01_refusal_names_the_native_plan_not_a_licence_question(self):
         from forensics_workshop import image
         for key in ("ewf", "ewf2"):
-            self.assertIn("licence rule", image.CONTAINERS[key])
+            self.assertIn("native", image.CONTAINERS[key])
             self.assertNotIn("question", image.CONTAINERS[key])
 
     def test_the_plan_records_the_rule(self):
