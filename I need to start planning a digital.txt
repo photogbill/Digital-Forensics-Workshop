@@ -1,0 +1,89 @@
+I need to start planning a digital forensics workshop, that includes write blocking, file recovery, hidden file discovery, exfil analysis, etc. With previews where possible before recovery.  
+
+For a local, offline-first desktop environment like ATK, a digital forensics module needs to handle everything from raw data ingestion to deep document exploitation without relying on external APIs. I want to be able to assign hunts as well, and be able to selectively scan things like folders, etc.  So if i'm scanning my documents looking for something in a collection of documents that I don't remember where I noted it, it will flag it for me. I want to leverage AI capabilities to be able to review the images, by leveraging capabilities in the image analysis sidebar and analysis suite sidebar.  Consider comprehensively how visual analysis and document analysis using LLMs can be leveraged.  Also, any audio files will be processed first by Whisper, with transcripts looked over for hunt related detection.  If the language is not English, it should note that as part of the transcription/translation.
+
+This workflow diagram maps out how an ingested piece of evidence moves through the various forensic capabilities of an analytical toolkit.
+
+---
+
+To build out a comprehensive workshop, here is a functional breakdown of the specific capabilities required at each stage of that workflow.
+
+### 1. Ingestion & Evidence Management
+
+The foundation of any forensics tool is preserving the chain of custody and handling raw data formats.
+
+* **Cryptographic Verification:** Automated hashing (MD5, SHA-1, SHA-256) upon file load to ensure evidence integrity.
+* **Disk Image Parsing:** Support for mounting and reading standard forensic images (E01, RAW/DD, AFF4) and extracting their directory trees.
+* **Logical Extraction:** Pulling targeted file structures (e.g., extracting just the `/Windows/System32/config` directory from a mounted image) rather than processing the entire disk.
+
+### 2. File System Forensics
+
+This module focuses on the raw storage layer, identifying what was on the disk, including what was deleted or hidden.
+
+* **File Carving:** Recovering deleted files by scanning raw disk space for known file signatures and magic numbers (e.g., finding the `FF D8 FF E0` header of a JPEG), bypassing the file system index entirely.
+* **MFT & Journal Parsing:** For NTFS drives, parsing the Master File Table (MFT) and USN Journal to track file creation, modification, and deletion timelines.
+* **Volume Shadow Copy Analysis:** Accessing hidden system snapshots to recover older versions of files or databases.
+
+### 3. DOMEX (Document & Media Exploitation)
+
+Highly relevant for intelligence and technical targeting, this module extracts semantic and hidden value from standard files.
+
+* **Deep Metadata Extraction:** Parsing EXIF data from images, camera serial numbers, GPS coordinates, and historical author/edit metadata from Office and PDF documents.
+* **Steganalysis:** Detecting data hidden within the noise of image or audio files (e.g., LSB steganography) and highlighting structural anomalies in file headers.
+* **Local OCR:** Optical Character Recognition to automatically index text found within scanned documents, PDFs, or images of screens.
+
+### 4. System & Execution Artifacts
+
+These capabilities reconstruct user activity and system state from operating system footprints.
+
+* **Registry Analysis:** Parsing Windows hives (SAM, SYSTEM, SOFTWARE) offline to extract user accounts, connected USB devices, and installed software.
+* **Execution Tracking:** Analyzing Prefetch files, Shimcache, Amcache, and LNK (shortcut) files to prove a specific executable was run on the system, even if the executable itself has been deleted.
+* **Browser Forensics:** Extracting SQLite databases to rebuild browsing history, search queries, session cookies, and downloaded files.
+
+### 5. Memory (RAM) Analysis
+
+Memory forensics requires distinct processing to analyze volatile data captured at a specific point in time.
+
+* **Process & Thread Extraction:** Listing running processes, mapping parent-child relationships, and detecting process hollowing or injection.
+* **Network State Reconstruction:** Identifying active, listening, or recently closed network connections and the specific processes that initiated them.
+
+
+### 6. Reporting & Automation
+
+* **Super Timeline Generation:** Merging file system timestamps, event logs, and browser history into a single, chronological master timeline of events.
+* **IOC Export:** Outputting extracted Indicators of Compromise (IPs, hashes, domains) into structured formats like CSV, JSON, or STIX.
+
+By stripping away the network and RF components and focusing exclusively on the file system and file-level data, the workshop can dive into the absolute bedrock of digital forensics.
+
+Here is a comprehensive breakdown of advanced file-system capabilities to include in a local toolkit workflow.
+
+### 1. Low-Level Volume & Artifact Carving
+
+This focuses on scraping data that the operating system no longer tracks or actively attempts to hide.
+
+* **Unallocated & Slack Space Parsing:** Moving beyond the file index to scrape cluster slack (the empty space between the end of a file and the end of the cluster) and unallocated space for data remnants, document fragments, or deleted files [3].
+* **Alternate Data Streams (ADS):** Hunting for hidden payloads on NTFS volumes where malicious code or concealed data is attached to legitimate files without altering their reported file size [3].
+* **Ext4 Inode Carving:** Extracting orphaned inodes in Linux file systems to rebuild directory trees and recover files even when the primary superblock or journal has been corrupted or overwritten.
+
+### 2. Deep Metadata & Journal Analysis
+
+This segment exploits the internal tracking mechanisms of modern file systems to reconstruct a suspect's activity.
+
+* **MFT & USN Journal Exploitation:** Parsing the Windows Master File Table (`$MFT`) and Update Sequence Number (USN) journal to track the exact lifecycle of a file (creation, modification, and deletion) even if the file itself no longer exists [2, 3].
+* **APFS Snapshot & CoW Forensics:** Leveraging Apple's Copy-on-Write (CoW) architecture to extract historical snapshots of files [3]. This allows an analyst to retrieve earlier versions of a document before it was modified or intentionally wiped.
+* **Timestomp Detection:** Cross-referencing standard MAC (Modified, Accessed, Created) timestamps against deeper kernel-level attributes (such as comparing `$FILE_NAME` against `$STANDARD_INFORMATION` in NTFS) to identify temporal anomalies where an attacker intentionally backdated a malicious file [3].
+
+### 3. Execution & System State Artifacts (File-Level)
+
+These capabilities rebuild what was run on the system and how it was interacted with, using standard file structures.
+
+* **LNK & Jump List Parsing:** Reconstructing user execution history by analyzing Windows shortcut (LNK) files and Jump Lists. These reveal the exact paths of local, removable, and remote files accessed by the user.
+* **Prefetch & Amcache Extraction:** Proving that a specific executable was run on the system—including its first and last execution times and total run count—even if the binary was subsequently deleted from the disk.
+* **Hibernation & Pagefile Extraction:** Scraping `hiberfil.sys` and `pagefile.sys` for remnants of plaintext passwords, decrypted keys, or fragments of files that were only ever loaded into RAM but eventually swapped to disk.
+
+### 4. Encryption & Access Control Forensics
+
+Dealing with modern security boundaries directly on the disk.
+
+* **FDE Discovery & Key Extraction:** Identifying the presence of Full Disk Encryption (BitLocker, LUKS, FileVault) [3] and automating the extraction of encryption keys from parsed memory dumps or hibernation files to decrypt volumes locally.
+* **Permissions & ACL Auditing:** Extracting access control lists and ownership metadata from NTFS and Ext4 structures to determine precisely which user accounts had permissions to access specific directories or sensitive files [3].

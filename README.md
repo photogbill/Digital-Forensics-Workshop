@@ -4,9 +4,12 @@ The evidence-handling engine behind ATK's **Digital Forensics** workspace.
 Offline, standard library only, and usable on its own from the command line.
 
 - **Package:** `forensics_workshop` (what ATK probes)
-- **Repository:** `github.com/photogbill/Digital_Forensics_Workshop`
+- **Repository:** `github.com/photogbill/Digital-Forensics-Workshop`
 - **Status:** Phases 1 and 2 of [`FORENSICS_PLAN.md`](FORENSICS_PLAN.md), built 2026-09-11
 - **Licence:** all rights reserved; see [`LICENSE`](LICENSE)
+- **Dependencies:** none outside the Python standard library. Anything added
+  must pass the licence rule — nothing that restricts commercial use
+  ([`FORENSICS_PLAN.md`](FORENSICS_PLAN.md) §1.1)
 
 > **This is not a hardware write blocker.** The engine guarantees it never
 > opens evidence for writing. It cannot stop Windows, another program, or the
@@ -31,7 +34,7 @@ Offline, standard library only, and usable on its own from the command line.
 
 | | |
 |---|---|
-| **Disk images** | RAW/DD as one file or a split set (`.001…`, `.aa…`), read through the same read-only door. A set that is incomplete, has a gap, or is opened part-way through is refused. **A container that is not raw — E01, AFF, VHDX, VMDK, QCOW, a dynamic VHD — is refused by its signature, with the reason**; reading one as raw would put every partition at the wrong offset while looking right. E01 waits on the pyewf licence question. A fixed VHD is accepted with its footer excluded, and says so. The whole disk and each segment are hashed in one read. |
+| **Disk images** | RAW/DD as one file or a split set (`.001…`, `.aa…`), read through the same read-only door. A set that is incomplete, has a gap, or is opened part-way through is refused. **A container that is not raw — E01, AFF, VHDX, VMDK, QCOW, a dynamic VHD — is refused by its signature, with the reason**; reading one as raw would put every partition at the wrong offset while looking right. E01 and the virtual disk containers are to be read natively: the libraries that read them fail the licence rule. A fixed VHD is accepted with its footer excluded, and says so. The whole disk and each segment are hashed in one read. |
 | **Partition tables** | MBR with the extended chain (loop-protected) and GPT. Header and array CRCs and the backup GPT are checked; a tampered primary array is read from the intact copy and the altered entries are named. Overlaps, partitions past the end of the image, hybrid and missing protective MBRs are reported. Unpartitioned space is listed as regions, and a volume boot sector found in one is called out. |
 | **NTFS** | Every MFT record: update sequence fixups *checked* (a torn record says so), attributes and data runs bounds-checked, attribute lists followed into extension records, sparse and fragmented streams read back, alternate data streams listed. Compressed and EFS-encrypted content is refused rather than returned as garbage. |
 | **Deleted entries** | A deleted record's name, times, runs and — measured against `$Bitmap` — how many of its clusters are now allocated to something else. Paths are rebuilt from `$FILE_NAME` and checked against each parent's sequence number, so a file whose folder's record was reused is shown as orphaned, not inside a stranger. |
@@ -43,7 +46,8 @@ Offline, standard library only, and usable on its own from the command line.
 
 `python -m forensics_workshop capabilities` prints the full table: what is
 built, what is planned and in which phase, which third-party packages are
-present and under what licence, and what is deferred or out of scope.
+present and under what licence, what is deferred or out of scope, and which
+third-party routes the licence rule excludes, with the licence that fails.
 
 ## Command line
 
@@ -108,7 +112,7 @@ includes three guards that matter more than any single test:
 
 ## How ATK uses it
 
-ATK finds the package in `vendor\Digital_Forensics_Workshop` (where
+ATK finds the package in `vendor\Digital-Forensics-Workshop` (where
 `get_engines.bat /forensics` clones it) or beside ATK as
 `..\Digital Forensics Workshop`. It probes `import forensics_workshop` through
 `atk/ui/subsystem.py`, and reports one of three states: **not installed**,
@@ -118,4 +122,3 @@ the workspace's Capabilities page lists it.
 
 ATK keeps only an index of where cases are, plus each case's custody head as
 an anchor kept outside the case. It never keeps the evidence.
-"# Digital-Forensics-Workshop" 

@@ -1,0 +1,62 @@
+Digital Forensics Workshop (forensics_workshop)
+
+Copyright (c) 2026 William R. Duncan. All rights reserved.
+
+
+1. NO LICENCE IS GRANTED
+
+This repository is made available so that its contents may be read. That is
+the only thing it is made available for.
+
+No licence, express or implied, is granted to any person or organisation to
+use, run, install, copy, modify, adapt, translate, merge, publish, distribute,
+sublicense, sell, or create derivative works from this software or any part of
+it. This applies to commercial and non-commercial purposes alike, to paid and
+unpaid use alike, and to individuals, companies, non-profit organisations,
+academic institutions, and government and military bodies alike.
+
+Obtaining a copy of this software does not grant permission to use it. That is
+true however the copy was obtained - by cloning or downloading this repository,
+by receiving a copy from someone else, or by any other means.
+
+
+2. HOW TO OBTAIN PERMISSION
+
+Permission must be requested from, and granted in writing by, the copyright
+holder. Each grant is specific to the recipient and to the use described in it,
+and confers nothing beyond what it states.
+
+Requests: william.r.duncan@hotmail.com
+
+
+3. COMPONENTS THAT ARE NOT PART OF THIS WORK
+
+The Digital Forensics Workshop is an optional component of the Analyst Toolkit
+(ATK) and a separate work held in its own repository. ATK is governed by its
+own terms, and nothing above grants any right in it.
+
+This software contains no third-party code and depends on nothing outside the
+Python standard library. Any third-party software used alongside it remains
+governed by its own licence terms, and nothing above modifies, restricts or
+claims any right in any of it.
+
+
+4. NO WARRANTY
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THIS SOFTWARE OR ITS USE OR OTHER DEALINGS.
+
+The Digital Forensics Workshop is an analytical aid. Its outputs - including
+but not limited to file type identifications, hash verification results,
+parsed artefacts and their timestamps, recovered or extracted files, and the
+results of write-protection tests - are not verified fact and are not legal or
+professional advice of any kind. They must be independently validated by a
+qualified examiner before being relied upon.
+
+Its software write protection is not a hardware write blocker and is not a
+substitute for one. For evidence that will be presented anywhere it matters,
+use a hardware write blocker.

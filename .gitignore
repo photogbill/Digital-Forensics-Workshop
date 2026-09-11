@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# SYNTHETIC SAMPLES ARE GENERATED, NEVER COMMITTED — and real evidence never
+# comes near this repository. Committing evidence is a mistake nobody undoes.
+/samples/*
+!/samples/build_samples.py
+
+# Case folders, wherever someone creates one by accident
+case.json
+custody.jsonl
+custody.lock
+index.db
+
+# Forensic image formats, so nothing large or sensitive is added by accident
+*.E01
+*.e01
+*.Ex01
+*.dd
+*.raw
+*.img
+*.aff
+*.aff4
+*.vhd
+*.vhdx
+*.vmdk

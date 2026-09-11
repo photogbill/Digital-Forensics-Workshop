@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "forensics_workshop"
+version = "0.2.0"
+description = "Digital Forensics Workshop — the evidence-handling engine behind ATK's forensics workspace. Offline, standard library only."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "William R. Duncan" }]
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["forensics_workshop*"]
