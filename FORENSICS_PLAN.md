@@ -619,3 +619,91 @@ class surprises get caught.
 8. The ATK Mobile page (can slot in once the core iOS artefacts are solid).
 
 Validation against the public images runs throughout, not at the end.
+
+---
+
+## 10. LLM hunts and the contact graph — over the image's parsed data
+
+Bill, 2026-09-11: analyse the data extracted from a disk/mobile image with the
+LLM — hunts for specific things, contacts into a graph. This is the Phase‑3
+"hunt engine across all of them," with the **structured forensic artefacts** as
+a third corpus beside image pixels and document text, plus the **link‑graph
+tab** already on the vision engine's roadmap, instantiated for communications.
+It reuses that engine's honesty architecture and obeys §6.
+
+### 10.1 The corpus and the reuse
+
+Everything the parsers extract already lands in the `artefacts` index as
+timeline‑ready rows (identity, timestamp+epoch, content, source DB, provenance).
+That IS the hunt corpus — no new pipeline, a third feeder for the existing hunt
+engine. Reused wholesale: `findings.jsonl` (engine/model) vs `decisions.jsonl`
+(analyst), never mixed; only `confirmed()` reaches the graph or the report;
+streaming with fsync (an overnight run loses nothing); gates as the cost lever;
+every model finding attributed and dated with the model that produced it.
+
+### 10.2 Two layers — deterministic first, LLM second
+
+The split is what keeps it defensible.
+
+- **Deterministic hunts (no model, reproducible):** keyword/term across message
+  text and web history; selectors (phone, email, crypto address, IP, IMEI, card
+  pattern); contacted‑a‑watchlist‑number; communicated‑with‑X‑in‑a‑window;
+  device‑in‑a‑geofence‑at‑a‑time; app‑installed; file‑matches‑a‑known‑bad
+  hashset. Every finding cites the exact rows. The backbone.
+- **LLM hunts (judgement over extracted text):** "messages discussing <topic>"
+  (threats, drug slang, fraud, logistics, grooming) as classification over the
+  parsed text; thread summaries; **triage ranking** ("of 50,000 messages, the
+  200 to read first, and why"). The model reads parsed rows, PROPOSES findings
+  with reasons, the analyst confirms. It never sets a timestamp or decides whose
+  a number is.
+- **Gates:** a cheap deterministic term‑gate decides which threads get an
+  expensive LLM pass; a skipped item emits `skipped_by_gate` ("not asked" ≠
+  "asked, found nothing").
+
+### 10.3 The contact / communications graph
+
+- **Nodes = identities** (numbers, emails, handles, contact records, accounts).
+  **Edges = communication events** (message, call, MMS) from the parsed
+  artefacts, weighted by frequency / recency / direction. **Edges are measured
+  facts** — deterministic, not model output.
+- **Entity resolution is the LLM's job, gated:** "this number + this email +
+  this handle are probably one person" is PROPOSED; only an analyst‑CONFIRMED
+  merge collapses the nodes (the man‑in‑the‑middle design — model proposes, the
+  analyst admits).
+- **Analytics are deterministic and NATIVE by default** (degree, centrality,
+  communities, bridges, first/last contact, dormant‑then‑active, bursts), so the
+  graph works in a bare interpreter; **networkx (BSD — passes §1.1) is an
+  OPTIONAL, lazy‑imported extra** for heavy algorithms, same pattern as the
+  crypto dep. The LLM then interprets ("this cluster behaves like a supply
+  chain"), proposed and confirmed, never asserted.
+- **Link analysis, not just comms:** the graph also absorbs co‑location (two
+  devices at one place/time), shared files, shared accounts — the i2/Analyst's
+  Notebook view (ATK already has an export path toward it).
+
+### 10.4 Selectors and standing hunts
+
+The analyst supplies **selectors** (numbers, emails, keywords, hashes,
+geofences, windows) that drive both the deterministic hunts and the graph's
+targets of interest; **standing hunts** always run (known‑bad hashset matches,
+the protect‑the‑examiner set the vision engine defines).
+
+### 10.5 Timeline and narration
+
+Artefacts, hunt hits and confirmed graph events land on the unified super‑
+timeline; the model can NARRATE a window ("what appears to have happened between
+14:02 and 14:19"), every sentence citing its rows (§6 timeline narration).
+
+### 10.6 Offline‑first (Bill, 2026-09-11)
+
+Evidence should not leave the machine, so the **local cognitive core runs the
+hunts by default**; ATK's online core is **opt‑in per case behind a loud consent
+gate**, every remote answer stamped `remote` (the online‑core safety
+properties). Air‑gapped is the forensic norm; online is a deliberate choice.
+
+### 10.7 Placement
+
+Phase 3, after the core mobile/disk artefact parsers exist (you need parsed rows
+before you can hunt them). The ATK Mobile page and the disk pages each gain a
+**Hunts** view and a **Graph** view over their parsed data. §6 governs
+throughout: the model's output is a finding, never a conclusion, and the report
+says which sentences came from a model.
