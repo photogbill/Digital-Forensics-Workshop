@@ -211,11 +211,33 @@ _TABLE = (
      "the file-system time as each row's measured UTC. Still to come: OCR and "
      "steganalysis (extend ATK's forensics.py/ocr.py), legacy OLE2 "
      "SummaryInformation, and native PST/OST."),
+    ("auto-pipeline", "One-button end-to-end runbook over a disk image", 3,
+     "native", "forensics_workshop.pipeline", "", "", "planned",
+     "Built native: on a registered disk image it runs hash → partitions → "
+     "NTFS → DOMEX → slack (carve optional) on every NTFS volume, resumable "
+     "and unattended — one failing step is recorded and the run carries on. "
+     "Deterministic; no model. Files a run-summary proposal into the review "
+     "queue as the top of the morning's worklist."),
+    ("review-queue", "Findings review queue — propose / confirm / reject", 3,
+     "native", "forensics_workshop.review", "", "", "planned",
+     "Built native: the man-in-the-middle of §6/§10. Engine proposals (and, "
+     "later, a local model's) land in findings.jsonl; an examiner's confirm or "
+     "reject lands in decisions.jsonl AND the custody log; only a confirmed "
+     "finding is admitted to a report or the contact graph. Streaming + fsync. "
+     "This is the queue the hunts and the graph file into."),
     ("transcripts", "Audio and video through Whisper", 3, "atk", "", "", "",
      "planned", "Tagged by task, not detected language."),
-    ("hunts", "Hunts across documents, images and transcripts", 3, "atk",
-     "", "", "", "planned",
-     "The shared hunt engine; findings confirmed by the analyst."),
+    ("hunts", "Hunts over the parsed rows — deterministic now, LLM next", 3,
+     "native", "forensics_workshop.hunts", "", "", "planned",
+     "Built native (the §10.2 backbone): selectors (email, IPv4, Bitcoin, "
+     "Ethereum, Luhn-checked cards, heuristic phone), keyword and watchlist "
+     "term search, a known-bad SHA-256 hashset over the file manifest, and a "
+     "high-value triage (geotagged photos + document/email counts). Every hit "
+     "is filed into the review queue as a PROPOSAL citing the exact rows; "
+     "re-runs are idempotent and never resurrect a rejected lead. No model — "
+     "reproducible. The LLM layer (topic/threat classification, thread "
+     "summaries, triage ranking) builds on this and proposes into the same "
+     "queue; still to come."),
     ("mobile-analysis",
      "Mobile image analysis — iOS backup (messages, calls, contacts, Safari)",
      3, "native", "forensics_workshop.artefacts.mobile", "", "", "planned",

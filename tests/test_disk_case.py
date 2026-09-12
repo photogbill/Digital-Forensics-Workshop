@@ -169,6 +169,11 @@ class DiskCase(_DiskFixture):
                          ("png", "complete", len(self.facts["png"])))
         self.assertFalse(any(r["type_id"] == "pe" for r in rows),
                          "tool.exe is allocated; an unallocated carve must not see it")
+        # a size floor drops the small candidates (the PNG is tiny)
+        _big, big_total = carve.list_candidates(
+            self.case, item.id, run_id=cs.run_id,
+            min_size=len(self.facts["png"]) + 1)
+        self.assertEqual(big_total, 0)
         before = self.case_files()
         pc = diskimage.preview_candidate(self.case, item.id, png[0]["id"])
         self.assertEqual(pc["data"], self.facts["png"])

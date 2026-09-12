@@ -59,6 +59,18 @@ class Ingest(CorpusCase):
                                       filter="mismatch")
         self.assertEqual([r["relpath"] for r in rows], ["Pictures/vacation.jpg"])
 
+    def test_min_size_keeps_only_files_at_least_that_big(self):
+        ingest.ingest_folder(self.case, self.item.id)
+        allrows, total = manifest.list_files(self.case, self.item.id)
+        sizes = sorted(r["size"] for r in allrows if r.get("size"))
+        if len(set(sizes)) < 2:
+            self.skipTest("need files of differing sizes")
+        threshold = sizes[-1]
+        big, big_total = manifest.list_files(self.case, self.item.id,
+                                             min_size=threshold)
+        self.assertTrue(all(r["size"] >= threshold for r in big))
+        self.assertLess(big_total, total, "the smaller files were not filtered")
+
     def test_links_are_recorded_and_not_followed(self):
         if not self.corpus["link_made"]:
             self.skipTest("cannot create symlinks here")

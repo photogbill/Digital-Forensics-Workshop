@@ -46,9 +46,11 @@ FILTER_LABELS = {
 
 
 def list_files(case, evidence_id: str, *, filter: str = "all",
-               search: str = "", limit: int = 5000,
+               search: str = "", min_size: int = 0, limit: int = 5000,
                offset: int = 0) -> tuple[list[dict], int]:
-    """(rows, total matching). `search` is a substring of the path."""
+    """(rows, total matching). `search` is a substring of the path; `min_size`
+    keeps only files of at least that many bytes (0 = no size floor), which
+    skips the icon-sized thumbnails that bury the files that matter."""
     if filter not in FILTERS:
         raise ValueError(f"unknown filter {filter!r}; one of {sorted(FILTERS)}")
     where = f"evidence_id = ? AND {FILTERS[filter]}"
@@ -58,6 +60,9 @@ def list_files(case, evidence_id: str, *, filter: str = "all",
         escaped = (search.replace("\\", "\\\\").replace("%", "\\%")
                    .replace("_", "\\_"))
         params.append(f"%{escaped}%")
+    if min_size > 0:
+        where += " AND size >= ?"
+        params.append(int(min_size))
     with _index.session(case.root) as conn:
         total = conn.execute(f"SELECT COUNT(*) FROM files WHERE {where}",
                              params).fetchone()[0]

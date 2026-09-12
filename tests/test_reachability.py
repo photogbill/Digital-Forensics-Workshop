@@ -36,6 +36,9 @@ BY_DESIGN = {
         "the file-object protocol; called by zipfile inside the stdlib",
     "image:RegionFile.tell":
         "the file-object protocol; called by zipfile inside the stdlib",
+    "review:confirmed":
+        "the admitted-findings view the report and contact graph will read; "
+        "neither surface is built yet (FORENSICS_PLAN §10)",
 }
 
 

@@ -31,6 +31,11 @@
     python -m forensics_workshop slack         CASE E002 --volume N --examiner NAME
     python -m forensics_workshop domex         CASE E002 --volume N --examiner NAME [--categories image,document,email] [--path Users] [--limit N]
     python -m forensics_workshop domex-list    CASE E002 --examiner NAME [--kind image] [--geo] [--search TEXT]
+    python -m forensics_workshop auto          CASE E002 --examiner NAME [--steps image,ntfs,domex,slack] [--carve] [--path Users] [--force]
+    python -m forensics_workshop hunt          CASE E002 --examiner NAME [--terms ransom,pier] [--watchlist +1555...] [--selectors email,phone] [--hashset bad.txt] [--no-high-value]
+    python -m forensics_workshop findings      CASE --examiner NAME [--status proposed] [--kind pipeline-run] [--id ID]
+    python -m forensics_workshop confirm       CASE FINDING_ID --examiner NAME [--note TEXT]
+    python -m forensics_workshop reject        CASE FINDING_ID --examiner NAME [--note TEXT]
     python -m forensics_workshop volume      PATH
     python -m forensics_workshop usb-policy  status | on | off
     python -m forensics_workshop probe-write FOLDER --i-confirm-this-is-not-evidence
@@ -55,6 +60,9 @@ from . import __version__, blocker, capabilities as caps
 from . import carve as _carve
 from . import diskimage as _disk
 from . import domex as _domex
+from . import hunts as _hunts
+from . import pipeline as _pipeline
+from . import review as _review
 from . import manifest as _manifest
 from . import verify as _verify
 from .artefacts import browser as _browser
@@ -398,6 +406,69 @@ def cmd_domex_list(args) -> int:
     return 0
 
 
+def cmd_auto(args) -> int:
+    case = _open(args)
+    steps = [s.strip() for s in args.steps.split(",") if s.strip()] \
+        or _pipeline.DEFAULT_STEPS
+    summary = _pipeline.run_pipeline(
+        case, args.evidence, steps=steps, carve=args.carve, domex_path=args.path,
+        domex_limit=args.limit, force=args.force, progress=_progress)
+    _print(summary.as_dict())
+    return 0 if summary.state == "completed" else 1
+
+
+_MARK = {"proposed": "?", "confirmed": "✓", "rejected": "✗"}
+
+
+def cmd_findings(args) -> int:
+    case = _open(args)
+    if args.id:
+        f = _review.finding(case, args.id)
+        if f is None:
+            print(f"no finding {args.id}", file=sys.stderr)
+            return 1
+        _print(f.as_dict())
+        return 0
+    for f in _review.list_findings(case, status=args.status, kind=args.kind,
+                                   evidence_id=args.evidence):
+        print(f"{_MARK.get(f.status, '?')} {f.id} {f.source:14} {f.kind:13} "
+              f"{f.title}")
+    t = _review.counts(case)
+    print(f"\nproposed {t['proposed']} · confirmed {t['confirmed']} · "
+          f"rejected {t['rejected']}")
+    return 0
+
+
+def cmd_hunt(args) -> int:
+    case = _open(args)
+    terms = [t.strip() for t in args.terms.split(",") if t.strip()]
+    watch = [t.strip() for t in args.watchlist.split(",") if t.strip()]
+    kinds = [k.strip().lower() for k in args.selectors.split(",") if k.strip()] \
+        or list(_hunts.SELECTOR_KINDS)
+    hashset: list = []
+    if args.hashset:
+        with open(args.hashset, encoding="utf-8") as fh:
+            hashset = fh.read().split()
+    summary = _hunts.run_hunts(
+        case, args.evidence, selectors=not args.no_selectors,
+        selector_kinds=kinds, terms=terms, watchlist=watch, hashset=hashset,
+        high_value=not args.no_high_value, progress=_progress)
+    _print(summary.as_dict())
+    return 0 if summary.state == "completed" else 1
+
+
+def cmd_confirm(args) -> int:
+    case = _open(args)
+    _print(_review.decide(case, args.finding, "confirmed", note=args.note))
+    return 0
+
+
+def cmd_reject(args) -> int:
+    case = _open(args)
+    _print(_review.decide(case, args.finding, "rejected", note=args.note))
+    return 0
+
+
 def cmd_volume(args) -> int:
     _print(blocker.volume_state(args.path).as_dict())
     return 0
@@ -566,6 +637,44 @@ def build_parser() -> argparse.ArgumentParser:
     dl.add_argument("--geo", action="store_true", help="only geotagged rows")
     dl.add_argument("--search", default="")
     dl.add_argument("--limit", type=int, default=200)
+
+    au = with_case("auto", cmd_auto,
+                   "run the whole deterministic pipeline on a disk image",
+                   evidence=True)
+    au.add_argument("--steps", default=",".join(_pipeline.DEFAULT_STEPS),
+                    help=f"comma-separated, from: {', '.join(_pipeline.STEPS)}")
+    au.add_argument("--carve", action="store_true",
+                    help="also carve each volume's unallocated space (slow)")
+    au.add_argument("--path", default="", help="scope DOMEX to files under this path")
+    au.add_argument("--limit", type=int, default=0, help="cap DOMEX rows (0 = no cap)")
+    au.add_argument("--force", action="store_true",
+                    help="redo steps whose output is already in the index")
+    ht = with_case("hunt", cmd_hunt,
+                   "deterministic hunts over the parsed rows → the review queue",
+                   evidence=True)
+    ht.add_argument("--terms", default="", help="comma-separated keywords")
+    ht.add_argument("--watchlist", default="",
+                    help="comma-separated watchlist values")
+    ht.add_argument("--selectors", default="",
+                    help="selector kinds, blank for all: "
+                         + ",".join(_hunts.SELECTOR_KINDS))
+    ht.add_argument("--no-selectors", action="store_true")
+    ht.add_argument("--hashset", default="",
+                    help="path to a file of known-bad SHA-256 hashes")
+    ht.add_argument("--no-high-value", action="store_true")
+    fn = with_case("findings", cmd_findings,
+                   "the review queue: proposals awaiting an examiner")
+    fn.add_argument("--evidence", default="")
+    fn.add_argument("--status", default="",
+                    choices=["", "proposed", "confirmed", "rejected"])
+    fn.add_argument("--kind", default="")
+    fn.add_argument("--id", default="", help="show one finding in full")
+    cf = with_case("confirm", cmd_confirm, "admit a finding (a custodial act)")
+    cf.add_argument("finding")
+    cf.add_argument("--note", default="")
+    rj = with_case("reject", cmd_reject, "reject a finding (a custodial act)")
+    rj.add_argument("finding")
+    rj.add_argument("--note", default="")
 
     vol = sub.add_parser("volume", help="is this volume read-only?")
     vol.add_argument("path")

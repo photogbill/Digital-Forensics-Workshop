@@ -54,6 +54,16 @@ Offline, standard library only, and usable on its own from the command line.
 
 Every result lands in the case's `artefacts` index as a timeline-ready row — the corpus the hunt engine and the contact/geospatial views run over (you need parsed rows before you can hunt them). DOMEX reads a file's bytes straight out of the NTFS volume through the same read-only door as everything else, parses the metadata in memory, and **writes nothing to disk**. A row's `at_utc` is the file system's *measured* modified time; the times a document or camera wrote about itself are authored values, kept in `detail` with their epoch named and never quietly promoted into the UTC column. Run `ntfs` on a volume first, then `domex`.
 
+### The runbook and the review queue
+
+`auto` presses the buttons for you: on a registered disk image it runs hash → partitions → NTFS → DOMEX → slack (carving is off by default — it's the slow one — and turns on with `--carve`) on **every** NTFS volume, in order, with no model in the loop. It's built to run alone: one failing step is recorded and the run carries on to the next, it takes progress and cancel callbacks, and it never stops to ask a question. It's **resumable** — a step whose output is already in the index is skipped, so a re-run costs only what's new (`--force` redoes). Each run files one summary into the **review queue**.
+
+### Hunts — turning parsed rows into leads
+
+`hunt` runs the reproducible questions an investigation starts with over the parsed `artefacts` rows and the file manifest: **selectors** (email, IPv4, Bitcoin and Ethereum addresses, credit-card numbers checked by the Luhn digit, heuristic phone numbers), **keyword** and **watchlist** term search, a **known-bad SHA-256 hashset**, and a **high-value triage** (each geotagged photo as a place and a time, plus the document and email counts — the seed of a goal-directed playbook like a kidnapping). Every hit is filed into the review queue as a proposal **citing the exact rows it came from** — a lead to confirm, never a conclusion. There's no model here: this is the deterministic backbone, reproducible byte-for-byte, and the local-LLM layer (topic classification, triage ranking) proposes into the same queue on top of it. Re-runs are idempotent and never resurrect a rejected lead.
+
+That queue is the line the whole tool draws, made concrete. A *measurement* (a hash, a time, a parsed row) is a fact; a *judgement* (this file matters, this thread is a threat) is a **proposal** that waits for you. The engine's runbook and, later, the local model file proposals into `findings.jsonl`; your `confirm`/`reject` lands in `decisions.jsonl` **and** the custody log, because admitting a finding is a custodial act; and only a confirmed finding is ever treated as admitted. So an overnight `auto` run can do all the deterministic work and park every proposal for you to confirm in the morning — ease of use, nobody present, without a finding no human stood behind.
+
 `python -m forensics_workshop capabilities` prints the full table: what is
 built, what is planned and in which phase, which third-party packages are
 present and under what licence, what is deferred or out of scope, and which
@@ -91,6 +101,11 @@ python -m forensics_workshop carve-recover D:\cases\OP-1 E002 17 --reason "..." 
 python -m forensics_workshop slack         D:\cases\OP-1 E002 --volume 2 --examiner "Name"
 python -m forensics_workshop domex          D:\cases\OP-1 E002 --volume 2 --examiner "Name" [--categories image,document,email] [--path Users] [--limit N]
 python -m forensics_workshop domex-list     D:\cases\OP-1 E002 --examiner "Name" [--kind image] [--geo] [--search "..."]
+python -m forensics_workshop auto           D:\cases\OP-1 E002 --examiner "Name" [--steps image,ntfs,domex,slack] [--carve] [--path Users] [--force]
+python -m forensics_workshop hunt           D:\cases\OP-1 E002 --examiner "Name" [--terms ransom,pier] [--watchlist ...] [--selectors email,phone] [--hashset bad.txt]
+python -m forensics_workshop findings       D:\cases\OP-1 --examiner "Name" [--status proposed] [--kind pipeline-run]
+python -m forensics_workshop confirm        D:\cases\OP-1 FINDING_ID --examiner "Name" [--note "..."]
+python -m forensics_workshop reject         D:\cases\OP-1 FINDING_ID --examiner "Name" [--note "..."]
 ```
 
 `--examiner` is required wherever a case is opened, because opening a case is

@@ -38,6 +38,20 @@ kept in `detail` with their epoch named. CLI `domex` / `domex-list`
 (`--geo` filters to geotagged rows). 16 tests (`tests/test_domex.py`), 296 on
 the device. `mobile-analysis` was the first Phase-3 item; DOMEX is the second.
 
+**Phase 3 — the runbook + the review queue (2026-09-12).** `pipeline.py` is the
+deterministic end-to-end runbook (`auto`): on a registered disk image it runs
+hash → partitions → NTFS → DOMEX → slack (carve optional) on every NTFS volume,
+resumable (skips steps already in the index), unattended (one failing step is
+recorded and the run continues; it asks nothing mid-run), no model. `review.py`
+is the man-in-the-middle of §6/§10: engine and (later) local-model **proposals**
+land in `findings.jsonl`; an examiner's confirm/reject lands in
+`decisions.jsonl` and the custody log; only a confirmed finding is admitted
+(`confirmed()` — the view the report and graph will read). So an overnight
+`auto` run does all the deterministic work and parks its proposals for morning
+review — unattended ease of use without a finding no human stood behind. CLI
+`auto` / `findings` / `confirm` / `reject`. This is the frame the §10 hunts and
+contact graph plug into next.
+
 `python -m forensics_workshop capabilities` lists what is built, what is not,
 and which routes the licence rule excludes.
 
@@ -731,3 +745,74 @@ before you can hunt them). The ATK Mobile page and the disk pages each gain a
 **Hunts** view and a **Graph** view over their parsed data. §6 governs
 throughout: the model's output is a finding, never a conclusion, and the report
 says which sentences came from a model.
+
+---
+
+## 11. Ease of use and the local-AI direction (Bill, 2026-09-12)
+
+Bill's goal: integrate local AI as much as possible so the workshop is easy to
+use and can run with nobody present. The reframe that keeps it defensible —
+**two things wear the word "automate," and they must stay apart:**
+
+- **Deterministic orchestration** (the button-pushing sequence) — automate 100%,
+  no model, safe to run unattended. **BUILT: `pipeline.py` (`auto`).**
+- **Model judgement** (what matters, what's a threat, who's who) — the model
+  PROPOSES, the examiner CONFIRMS; it never decides a type, time, hash or
+  offset, and never auto-writes a finding. **BUILT the queue it files into:
+  `review.py`.** The overnight run does all deterministic work + parks every
+  model proposal for morning review. This is the whole "nobody present" story
+  without a finding no human stood behind.
+
+**The backlog Bill set (2026-09-12), roughly in value order:**
+
+1. **The hunt layer on the queue** (§10). **The DETERMINISTIC backbone is BUILT
+   (2026-09-12, `hunts.py`, verb `hunt`)**: selectors (email/IPv4/BTC/ETH/
+   Luhn-checked card/heuristic phone), keyword + watchlist term search, a
+   known-bad SHA-256 hashset over the file manifest, and a high-value triage
+   (geotagged photos + document/email counts — the playbook seed). Each hit is
+   filed into the review queue citing the exact rows; idempotent; a rejected
+   lead is never resurrected. **Still to come: the LLM layer** — topic/threat
+   classification and triage ranking over the same rows (model PROPOSES, analyst
+   CONFIRMS, §6), the goal-directed **playbooks** (LLM as planner), and the
+   **contact graph** — all proposing into the same queue. Corpus note: hunts run
+   over the `artefacts` metadata today; full document-body text needs the
+   text-extraction step of Phase 3.
+2. **"Operate on many" UX** (ATK Carving/Files pages) — **checkboxes + select-all,
+   bulk export-to-case, and a file-size filter are BUILT (2026-09-12)**: a
+   checkbox column with a "Select all shown" box, an engine-level `min_size`
+   floor on `list_files`/`list_candidates`, and bulk "Export checked" / "Recover
+   checked" that loop the existing hashed, custody-logged calls. Still TODO: the
+   **gallery preview-all** for image/video/audio candidates (needs the media
+   layer of item 5 for video/audio thumbnails).
+3. **Whisper transcribe + translate INSIDE the workshop** — reuse ATK's existing
+   transcription engine, route output into the case and the `artefacts` index as
+   `transcript` rows (original + translation kept, tagged by task not detected
+   language) so it joins the hunt corpus. The analyst never leaves the workspace
+   for anything case-related (Bill's single-pane-of-glass principle).
+4. **Live device / SD-card triage** — a physical-device source
+   (`\\.\PhysicalDriveN`, read-only) feeding the same partitions/NTFS/carve/DOMEX
+   stack. Honest caveats: software read-only ≠ a write blocker (pair with the USB
+   WriteProtect policy already built, and a hardware blocker for evidence); for a
+   dying drive, **image once then carve the image** (repeated reads kill failing
+   media). Label it triage/recovery, distinct from evidence to present.
+5. **Damaged-video forensics** — a native **container integrity map** (walk the
+   MP4/MOV boxes, mark byte/time ranges that decode cleanly vs. error) shown as a
+   green/red timeline + slider to jump to any section and pull a still even when
+   whole-file playback fails; **decode/thumbnail/remux via FFmpeg as a
+   subprocess** (error-resilient flags, so a corrupt file returns an error we
+   catch, never a crash). The "first part broken" case is usually a missing/
+   truncated `moov` index — the external answer is **untrunc** (rebuild from a
+   healthy reference clip); `ffprobe`/GPAC map the structure. FFmpeg/untrunc/GPAC
+   are copyleft → optional, separately-fetched, arm's-length (the §1.1 pattern);
+   the integrity map itself stays native/stdlib.
+
+Build order chosen by Bill: **the runbook + review queue first (done)**, then
+**the ATK usability pass — the Run-everything button, the Findings/review page,
+and the operate-on-many UX (done 2026-09-12)** — then the rest as we go. Also
+done in that pass: the E01 file-picker filter, which had omitted `*.E01`.
+
+Remaining §11 work, roughly in order: the **gallery preview-all**, **Whisper
+in-workspace**, the **live device / SD-card reader**, and the **damaged-video
+forensics** (with its shared FFmpeg media layer). The **local-LLM hunt layer**
+(item 1, = §10) is the higher strategic arc and now has the review queue to
+file into.

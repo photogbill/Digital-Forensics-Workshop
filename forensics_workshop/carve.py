@@ -713,8 +713,8 @@ def carve(case, evidence_id: str, reader, regions, *, scope: str,
 
 
 def list_candidates(case, evidence_id: str, *, run_id: str | None = None,
-                    type_id: str = "", status: str = "", limit: int = 500,
-                    offset: int = 0) -> tuple[list, int]:
+                    type_id: str = "", status: str = "", min_size: int = 0,
+                    limit: int = 500, offset: int = 0) -> tuple[list, int]:
     where, args = ["evidence_id = ?"], [evidence_id]
     if run_id:
         where.append("run_id = ?")
@@ -725,6 +725,9 @@ def list_candidates(case, evidence_id: str, *, run_id: str | None = None,
     if status:
         where.append("status = ?")
         args.append(status)
+    if min_size > 0:
+        where.append("length >= ?")
+        args.append(int(min_size))
     clause = " AND ".join(where)
     with _index.session(case.root) as conn:
         total = conn.execute(f"SELECT COUNT(*) FROM carve_candidates WHERE {clause}",

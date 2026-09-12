@@ -173,6 +173,16 @@ class Extractors(unittest.TestCase):
         pdf = b"%PDF-1.5\n<< /Author <feff00420061006c> >>\n%%EOF"
         self.assertEqual(domex.read_document_props(pdf, "pdf")["author"], "Bal")
 
+    def test_pdf_literal_utf16_bom_and_octal_escapes(self):
+        # a real /Info author is often an octal-escaped UTF-16BE string with a
+        # BOM — the case the Party Girl MLA handbook exposed. And \050/\051 are
+        # escaped parens, which a literal string cannot carry unescaped.
+        pdf = (b"%PDF-1.6\n<< /Author (\\376\\377\\000M\\000a\\000r\\000i\\000a) "
+               b"/Title (Plain \\050ok\\051) >>\n%%EOF")
+        p = domex.read_document_props(pdf, "pdf")
+        self.assertEqual(p["author"], "Maria")
+        self.assertEqual(p["title"], "Plain (ok)")
+
     def test_legacy_ole_is_named_not_mined(self):
         p = domex.read_document_props(b"\xd0\xcf\x11\xe0" + bytes(100), "ole2")
         self.assertIn("OLE2", p["note"])

@@ -370,15 +370,57 @@ _PDF_FIELDS = ("Author", "Title", "Subject", "Creator", "Producer",
                "CreationDate", "ModDate", "Keywords")
 
 
+_PDF_ESCAPES = {"n": 10, "r": 13, "t": 9, "b": 8, "f": 12,
+                "(": 0x28, ")": 0x29, "\\": 0x5C}
+
+
+def _pdf_unescape(text: str) -> bytes:
+    """The bytes of a PDF literal string: `\\ddd` octal, the named escapes, a
+    backslash-newline line continuation, and raw bytes (latin-1 chars) passed
+    through. A real /Info author is often octal-escaped UTF-16, which the old
+    `\\(.)->\\1` collapse turned into digits — this returns the real bytes."""
+    out = bytearray()
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and i + 1 < n:
+            nxt = text[i + 1]
+            if nxt in "01234567":
+                j, digits = i + 1, ""
+                while j < n and len(digits) < 3 and text[j] in "01234567":
+                    digits += text[j]
+                    j += 1
+                out.append(int(digits, 8) & 0xFF)
+                i = j
+                continue
+            if nxt in _PDF_ESCAPES:
+                out.append(_PDF_ESCAPES[nxt])
+            elif nxt in ("\n", "\r"):
+                pass                          # a line continuation: drop it
+            else:
+                out.append(ord(nxt) & 0xFF)
+            i += 2
+            continue
+        out.append(ord(ch) & 0xFF)
+        i += 1
+    return bytes(out)
+
+
+def _decode_pdf_bytes(raw: bytes) -> str:
+    """UTF-16 when the BOM says so (PDF text strings are PDFDocEncoding or
+    UTF-16BE), latin-1 otherwise — which covers the ASCII range PDFDocEncoding
+    shares with it."""
+    if raw[:2] in (b"\xfe\xff", b"\xff\xfe"):
+        return _clean(raw.decode("utf-16", "replace"))
+    return _clean(raw.decode("latin-1", "replace"))
+
+
 def _pdf_string(match: "re.Match") -> str:
     literal, hexstr = match.group(1), match.group(2)
     if literal is not None:
-        return _clean(re.sub(r"\\(.)", r"\1", literal))
+        return _decode_pdf_bytes(_pdf_unescape(literal))
     try:
-        raw = bytes.fromhex(re.sub(r"\s", "", hexstr))
-        if raw[:2] in (b"\xfe\xff", b"\xff\xfe"):
-            return _clean(raw.decode("utf-16", "replace"))
-        return _clean(raw.decode("latin-1", "replace"))
+        return _decode_pdf_bytes(bytes.fromhex(re.sub(r"\s", "", hexstr)))
     except ValueError:
         return ""
 
@@ -712,6 +754,9 @@ def analyse_volume(case, evidence_id: str, volume: int, *,
     run_id = summary.run_id
 
     source, vol, _row = _disk.open_ntfs(case, evidence_id, volume)
+    _start_run(case, evidence_id, run_id, volume,
+               {"categories": list(categories), "path_prefix": path_prefix,
+                "limit": limit})
     case.custody.record(
         "domex.started", actor=case.actor(), target=f"{evidence_id}:v{volume}",
         detail={"run_id": run_id, "categories": list(categories),
@@ -766,11 +811,31 @@ def analyse_volume(case, evidence_id: str, volume: int, *,
     finally:
         source.close()
         summary.finished_at = utc_now()
+        _finish_run(case, run_id, summary.state, summary.as_dict())
         case.custody.record(
             f"domex.{summary.state}", actor=case.actor(),
             target=f"{evidence_id}:v{volume}",
             detail=dict(summary.as_dict(), run_id=run_id))
     return summary
+
+
+def _start_run(case, evidence_id, run_id, volume, settings) -> None:
+    """Record this DOMEX pass in the shared `runs` table, so the pipeline (and
+    a re-run) can tell a volume was mined even when it yielded no rows."""
+    with _index.session(case.root) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO runs (run_id, evidence_id, kind, volume, "
+            "started_at, state, settings_json) VALUES (?, ?, 'domex', ?, ?, "
+            "'running', ?)",
+            (run_id, evidence_id, volume, utc_now(),
+             json.dumps(settings, default=str)))
+
+
+def _finish_run(case, run_id, state, summary) -> None:
+    with _index.session(case.root) as conn:
+        conn.execute("UPDATE runs SET finished_at = ?, state = ?, summary_json "
+                     "= ? WHERE run_id = ?",
+                     (utc_now(), state, json.dumps(summary, default=str), run_id))
 
 
 def _mine(vol, entry, tr, category, mail_kind, cap_ceiling, summary) -> list:
