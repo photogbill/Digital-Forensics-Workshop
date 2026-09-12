@@ -7,15 +7,15 @@ fit on media with a file-size limit. Both are read here through
 `blocker.open_evidence`, one handle per segment, and presented as a single
 random-access stream. Nothing in this module can write.
 
-**A CONTAINER IS NOT RAW, AND READING ONE AS RAW LIES.** EnCase E01, AFF,
+**A CONTAINER IS NOT RAW, AND READING ONE AS RAW LIES.** EnCase Ex01, AFF,
 dynamic VHD, VHDX, VMDK and QCOW images have headers, compression and
 metadata of their own. Read as raw bytes they parse as a disk full of
 garbage — partition tables that are not there, volumes at the wrong offsets
 — and every result is wrong while looking right. So an image is identified
 by its signature before it is accepted, and a container this engine cannot
-read is REFUSED with the reason. E01 in particular waits on a native reader;
-the library that reads it, libewf (pyewf), is licence-permitted, but native
-is the default here for the offline property (FORENSICS_PLAN.md §1.1).
+read is REFUSED with the reason. **EnCase E01 (EWF) IS read**, natively, in
+`ewf.py` — decoded to a raw stream so everything downstream is unaware it was
+compressed; only Ex01 and the rest are still refused (FORENSICS_PLAN.md §1.1).
 
 A fixed-size VHD is the exception that is honest to accept: it IS the raw
 disk, followed by a 512-byte footer. The footer is found, excluded from the
@@ -38,19 +38,16 @@ from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import blocker, filetype
+from . import blocker, ewf, filetype
 from .errors import Cancelled, EvidenceError
 from .hashing import CHUNK, Hasher, Hashes
 
 #: Signatures of containers that are not raw disks, and why each is refused.
+#: E01/EWF is NOT here — it is read natively (see `ewf.py`). Ex01 still is.
 CONTAINERS = {
-    "ewf": "an EnCase E01 image — compressed chunks with their own metadata. "
-           "This version cannot read it yet; a native reader is planned "
-           "(FORENSICS_PLAN.md §1.1). Convert it to raw with a trusted tool "
-           "(FTK Imager, ewfexport) and register the raw image, recording "
-           "that conversion in your notes.",
-    "ewf2": "an EnCase Ex01 image. See E01: not readable in this version; a "
-            "native reader is planned.",
+    "ewf2": "an EnCase Ex01 image — a different container from E01 (bzip2 and a "
+            "changed layout). E01 is read natively; Ex01 is not yet. Export it "
+            "to E01 or raw with a trusted tool and register that.",
     "aff": "an AFF image. Not readable in this version.",
     "aff4": "an AFF4 image. Not readable in this version.",
     "vhdx": "a Hyper-V VHDX disk — a block-allocation container, not raw.",
@@ -65,6 +62,21 @@ MAX_OPEN_SEGMENTS = 8
 
 _NUMERIC = re.compile(r"^\d{2,}$")
 _ALPHA = re.compile(r"^[a-z]{2}$|^[A-Z]{2}$")
+_EWF = re.compile(r"^[Ee](\d\d|[A-Za-z]{2})$")
+
+
+def _ewf_next(two: str) -> str | None:
+    """The EWF segment suffix after `two` (the chars past the E): 01…99 then
+    AA…ZZ, EnCase's scheme."""
+    if two.isdigit():
+        n = int(two)
+        return f"{n + 1:02d}" if n < 99 else "AA"
+    up = two.upper()
+    a, b = ord(up[0]) - 65, ord(up[1]) - 65
+    b += 1
+    if b == 26:
+        a, b = a + 1, 0
+    return None if a == 26 else chr(65 + a) + chr(65 + b)
 
 
 @dataclass(frozen=True)
@@ -130,6 +142,22 @@ def discover_segments(path) -> list[Path]:
         return [first]
     stem, suffix = first.name.rsplit(".", 1)
     sibling = lambda s: first.parent / f"{stem}.{s}"            # noqa: E731
+    if _EWF.match(suffix):
+        letter, two = suffix[0], suffix[1:]
+        if two not in ("01", "aa", "AA"):
+            if two.isdigit() and sibling(f"{letter}{int(two) - 1:02d}").is_file():
+                raise EvidenceError(
+                    f"{first} is EWF segment {suffix}, not the first. Register "
+                    f"{stem}.{letter}01 — the whole set is read from it.")
+            return [first]
+        segments = [first]
+        while (nxt := _ewf_next(two)) is not None:
+            cand = sibling(f"{letter}{nxt}")
+            if not cand.is_file():
+                break
+            segments.append(cand)
+            two = nxt
+        return segments
     if _NUMERIC.match(suffix):
         width, number = len(suffix), int(suffix)
         name = lambda n: f"{n:0{width}d}"                          # noqa: E731
@@ -212,6 +240,12 @@ def describe(paths: list[Path]) -> ImageInfo:
         head = fh.read(filetype.HEAD_BYTES)
     kind = filetype.identify(head, size=segments[0].size)
     notes: list[str] = []
+    if kind.type_id == "ewf":
+        with ewf.EwfImage(paths) as img:
+            disk = img.size
+            notes = img.notes()
+        return ImageInfo("ewf", disk, file_bytes, tuple(segments),
+                         kind.type_id, kind.label, tuple(notes))
     if kind.type_id in CONTAINERS:
         raise EvidenceError(f"{paths[0]} is {CONTAINERS[kind.type_id]}")
     fmt = "split-raw" if len(paths) > 1 else "raw"
@@ -255,6 +289,10 @@ class ImageSource:
         self.size = info.size
         self._handles: OrderedDict = OrderedDict()
         self._lock = threading.Lock()
+        #: For a container we decode (EWF), reads go through it rather than the
+        #: raw segment arithmetic below; the segments stay the physical files.
+        self._ewf = (ewf.EwfImage([s.path for s in info.segments])
+                     if info.format == "ewf" else None)
 
     @classmethod
     def open(cls, path) -> "ImageSource":
@@ -275,6 +313,8 @@ class ImageSource:
             for fh in self._handles.values():
                 fh.close()
             self._handles.clear()
+        if self._ewf is not None:
+            self._ewf.close()
 
     def _handle(self, index: int):
         fh = self._handles.get(index)
@@ -292,6 +332,8 @@ class ImageSource:
         """Up to `length` bytes of the DISK at `offset`; short only at its end."""
         if offset < 0 or length < 0:
             raise ValueError("offset and length must not be negative")
+        if self._ewf is not None:
+            return self._ewf.read_at(offset, length)
         end = min(offset + length, self.size)
         if offset >= end:
             return b""
@@ -373,6 +415,8 @@ def hash_image(source: ImageSource, *, should_cancel=None,
     covers the file as it is on the media, footer included — the two answer
     different questions and both are kept.
     """
+    if source.info.format == "ewf":
+        return _hash_ewf(source, should_cancel=should_cancel, progress=progress)
     whole = Hasher()
     per_segment: list[Hashes] = []
     done = 0
@@ -392,5 +436,38 @@ def hash_image(source: ImageSource, *, should_cancel=None,
                 done += len(chunk)
                 if progress is not None and done % (256 * CHUNK) < CHUNK:
                     progress(f"hashed {done:,} of {source.info.file_bytes:,} bytes")
+        per_segment.append(seg_hasher.result())
+    return whole.result(), per_segment
+
+
+def _hash_ewf(source: ImageSource, *, should_cancel=None, progress=None):
+    """For an EWF image the DISK hash is of the decompressed logical stream —
+    the acquisition hash an examiner compares against — read back through the
+    reader. Each segment's digest still covers the physical .E0x file, so the
+    evidence files' own integrity is recorded too.
+    """
+    whole = Hasher()
+    pos = 0
+    while pos < source.size:
+        if should_cancel is not None and should_cancel():
+            raise Cancelled("image hashing was cancelled")
+        data = source.read_at(pos, CHUNK)
+        if not data:
+            break
+        whole.update(data)
+        pos += len(data)
+        if progress is not None and pos % (256 * CHUNK) < CHUNK:
+            progress(f"hashed {pos:,} of {source.size:,} disk bytes")
+    per_segment: list[Hashes] = []
+    for seg in source.info.segments:
+        seg_hasher = Hasher()
+        with blocker.open_evidence(seg.path) as fh:
+            while True:
+                if should_cancel is not None and should_cancel():
+                    raise Cancelled("image hashing was cancelled")
+                block = fh.read(CHUNK)
+                if not block:
+                    break
+                seg_hasher.update(block)
         per_segment.append(seg_hasher.result())
     return whole.result(), per_segment

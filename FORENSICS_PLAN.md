@@ -24,6 +24,20 @@ recovery that records how the bytes were found. ATK gained **Disk Image** and
 (249 tests on a machine with ntfs-3g, sfdisk and sgdisk; the six real-tool
 tests skip elsewhere).
 
+**Phase 3 — begun (2026-09-12): DOMEX over a disk image** (`forensics_workshop/
+domex.py`, §10.7's "parsed rows before you can hunt them"). Over an NTFS volume
+it types every eligible file and mines the high-value categories into the
+`artefacts` index: **documents** (OOXML docx/xlsx/pptx and OpenDocument
+properties, a PDF `/Info` scan — author, title, created/modified UTC, producing
+app), **images** (JPEG/TIFF EXIF including the **full GPS IFD** — signed
+lat/lon, altitude, the UTC GPS timestamp — the input to the geospatial view),
+and **email** (EML and mbox headers, one row per message, Date → UTC). Reads
+through the read-only door; writes nothing to disk; the file-system time is the
+row's measured `at_utc`, a document's or camera's own times are authored and
+kept in `detail` with their epoch named. CLI `domex` / `domex-list`
+(`--geo` filters to geotagged rows). 16 tests (`tests/test_domex.py`), 296 on
+the device. `mobile-analysis` was the first Phase-3 item; DOMEX is the second.
+
 `python -m forensics_workshop capabilities` lists what is built, what is not,
 and which routes the licence rule excludes.
 
@@ -66,12 +80,22 @@ parsers against real ntfs-3g and util-linux output.
   asks real Qt to draw a carved PNG thumbnail.
 - **No volume written by Windows has been parsed.** The real-tool tests use
   NTFS written by ntfs-3g, which is real NTFS but not Windows' own; the first
-  Windows image is the next test.
+  Windows image is the next test. **DOMEX inherits this**: it is proven end to
+  end on a synthetic NTFS volume and its document extractors are proven on real
+  files (the ATK folder's genuine docx/pptx/PDFs from several producers), but it
+  has **not yet run over the real Party Girl Windows volume** — that needs the
+  E01 registered as a disk image and NTFS-parsed first, and the image was not in
+  a connected folder at build time.
+- **The EXIF/GPS path is proven on a spec-correct synthetic JPEG, not yet on a
+  real camera file** — none with EXIF were reachable. The synthetic builder
+  follows the TIFF inline-value rule the reader depends on, so it exercises the
+  reader rather than sidestepping it, but a real geotagged photo is the next
+  test.
 - **The change journal has only met synthetic records** laid out from the
   documented structures; ntfs-3g does not keep one.
 - **Not built in Phase 2:** LZNT1 decompression (compressed streams are
   refused, not returned), FAT/exFAT directories (volumes are identified and
-  can be carved), ext4, E01 and VHDX/VMDK (to be native, §1.1), Volume Shadow Copies (Phase 4),
+  can be carved), ext4, VHDX/VMDK (to be native, §1.1; **E01/EWF is now BUILT**), Volume Shadow Copies (Phase 4),
   `$MFT`/`$J` files exported by collection tools such as KAPE, and a live
   physical-device reader.
 - The USB `WriteProtect` policy and the write probe have not run on Windows.
@@ -131,7 +155,7 @@ against the Midas BLUE layouts and the stdlib OSM PBF reader.
 |---|---|---|
 | Hashing MD5/SHA-1/SHA-256 | **native** (`hashlib`) | trivial, and the foundation |
 | RAW/DD image reading | **native** | it is a byte stream |
-| E01 / EWF reading | **native** (`zlib`) by default | documented, chunks are zlib-compressed. pyewf (libewf) is LGPL — licence-permitted as an alternative; native chosen for the offline property |
+| E01 / EWF reading | **native** (`zlib`) — BUILT (`ewf.py`, 2026-09-12) | sections + volume/disk geometry + base-offset table + zlib chunks → one raw stream; verified on a real 20 GB EnCase image (BelkaCTF Party Girl). pyewf (libewf, LGPL) is the licence-permitted alternative. Ex01 still refused |
 | AFF4 | **native**, low priority | rare in practice. pyaff4 is Apache-2.0 (permitted), but the engine avoids dependencies by default |
 | VHD/VHDX/VMDK | **native** by default | a fixed VHD is read already; the rest follow published specifications. pyvhdi/pyvmdk (libyal, LGPL) are licence-permitted alternatives — the "Apache-2.0-ish" this row once said was wrong |
 | Partition tables (MBR/GPT) | **native** | documented, small |
@@ -204,7 +228,7 @@ Where each library the plan first named now stands:
 
 | library | licence | rule | plan |
 |---|---|---|---|
-| pyewf (libewf) | LGPL-3.0-or-later | **permitted** | E01 native by default; library the alternative |
+| pyewf (libewf) | LGPL-3.0-or-later | **permitted** | E01 read natively (BUILT, `ewf.py`); library is the alternative |
 | pyvhdi, pyvmdk (libyal) | LGPL-3.0-or-later | **permitted** | VHDX/VMDK/dynamic VHD native by default |
 | pytsk3 (Sleuth Kit) | Apache-2.0 AND IPL-1.0 AND CPL-1.0 | **permitted** | filesystems native, one at a time; library a breadth fallback |
 | pyvshadow (libvshadow) | LGPL-3.0-or-later | **permitted** | Volume Shadow Copies native (Phase 4) |

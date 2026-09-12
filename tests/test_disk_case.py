@@ -223,9 +223,10 @@ class DiskCase(_DiskFixture):
     def test_registration_refusals(self):
         with self.assertRaisesRegex(EvidenceError, "first segment"):
             self.case.add_image(self.segments[1])
+        # An E01 is read natively now; a malformed one is reported, not guessed.
         e01 = self.evidence / "other.E01"
         e01.write_bytes(b"EVF\x09\x0d\x0a\xff\x00" + bytes(1024))
-        with self.assertRaisesRegex(EvidenceError, "E01"):
+        with self.assertRaisesRegex(EvidenceError, "EWF"):
             self.case.add_image(e01)
         self.case.add_image(self.segments[0])
         with self.assertRaisesRegex(EvidenceError, "already registered"):

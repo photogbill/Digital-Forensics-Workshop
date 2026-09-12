@@ -47,10 +47,10 @@ licence nobody has checked is refused rather than waved through.
 is native and standard-library-only (`tests/test_isolation.py`) — it runs in
 a bare interpreter, installs nothing, and bundles no third-party licence
 texts. A permitted library is reached for only where a native parser would be
-a poor use of time (APFS is the standing example, via pyfsapfs). So E01,
-shadow copies, ESE and the virtual-disk containers are PLANNED NATIVE with a
-permitted library named as the alternative, not because the library is
-forbidden. A format is implemented from its documentation, never copied or
+a poor use of time (APFS is the standing example, via pyfsapfs). So E01/EWF is
+read natively (built — `ewf.py`), and shadow copies, ESE and the virtual-disk
+containers are PLANNED NATIVE, each with a permitted library named as the
+alternative, not because the library is forbidden. A format is implemented from its documentation, never copied or
 translated from a GPL/AGPL project whose terms would reach this code.
 
 For a third-party row the `package` column is probed with `find_spec` —
@@ -154,8 +154,9 @@ _TABLE = (
      "Chromium family and Firefox. WAL-aware. Cookie values not decrypted."),
     ("raw", "RAW/DD image reading, single and split", 2, "native",
      "forensics_workshop.image", "", "", "planned",
-     "Containers that are not raw (E01, VHDX, VMDK, dynamic VHD) are refused "
-     "by signature, with the reason. Fixed VHD accepted, footer excluded."),
+     "E01/EWF is read natively (see the ewf row); other containers that are "
+     "not raw (Ex01, VHDX, VMDK, dynamic VHD) are refused by signature, with "
+     "the reason. Fixed VHD accepted, footer excluded."),
     ("partitions", "MBR/GPT partition tables", 2, "native",
      "forensics_workshop.partitions", "", "", "planned",
      "CRCs and the backup GPT checked; unpartitioned gaps reported."),
@@ -181,10 +182,12 @@ _TABLE = (
      "forensics_workshop.carve", "", "", "planned",
      "Every candidate carries the basis of its length and previews before "
      "anything is written."),
-    ("ewf", "E01/EWF images", 2, "native", "", "", "", "planned",
-     "Refused today, with the reason. Planned native — the chunks are zlib, "
-     "which the stdlib decompresses. pyewf (libewf, LGPL) is licence-permitted "
-     "as an alternative; native is the default for the offline property."),
+    ("ewf", "E01/EWF images", 2, "native", "forensics_workshop.ewf", "", "",
+     "planned",
+     "Read natively: EWF sections, volume/disk geometry, the base-offset table "
+     "and zlib chunks decoded to one raw stream, verified against the geometry. "
+     "pyewf (libewf, LGPL) is a licence-permitted alternative; native chosen "
+     "for the offline property. Ex01 is not read (a different container)."),
     ("vdisk", "VHDX, VMDK and dynamic VHD images", 2, "native", "", "", "",
      "planned",
      "Refused today, with the reason; a fixed VHD is already read. Planned "
@@ -197,8 +200,17 @@ _TABLE = (
      "Filesystems are added natively, one at a time (NTFS built; FAT, ext4, "
      "APFS to come). pytsk3 (Apache-2.0 over an IPL/CPL core) is "
      "licence-permitted as a breadth fallback."),
-    ("domex", "Document metadata, EXIF, OCR, steganalysis", 3, "atk", "", "",
-     "", "planned", "Extends ATK's existing forensics.py and ocr.py."),
+    ("domex", "Document/image/email metadata over a disk image (EXIF/GPS)",
+     3, "native", "forensics_workshop.domex", "", "", "planned",
+     "Built native: over an NTFS volume it mines documents (OOXML and "
+     "OpenDocument properties, a PDF /Info scan), images (JPEG/TIFF EXIF "
+     "including the full GPS IFD — signed latitude/longitude and the UTC GPS "
+     "timestamp) and email (EML and mbox headers, one row per message) into "
+     "the artefacts index — the corpus the hunts and the geospatial view run "
+     "over. Reads through the read-only door; writes nothing to disk, keeps "
+     "the file-system time as each row's measured UTC. Still to come: OCR and "
+     "steganalysis (extend ATK's forensics.py/ocr.py), legacy OLE2 "
+     "SummaryInformation, and native PST/OST."),
     ("transcripts", "Audio and video through Whisper", 3, "atk", "", "", "",
      "planned", "Tagged by task, not detected language."),
     ("hunts", "Hunts across documents, images and transcripts", 3, "atk",

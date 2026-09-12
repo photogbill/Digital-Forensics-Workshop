@@ -81,8 +81,7 @@ class SplitImages(TempDirCase):
         self.assertTrue(any("interrupted copy" in n for n in info.notes), info.notes)
 
     def test_containers_that_are_not_raw_are_refused_with_the_reason(self):
-        cases = {"e.E01": b"EVF\x09\x0d\x0a\xff\x00" + bytes(600),
-                 "v.vhdx": b"vhdxfile" + bytes(600),
+        cases = {"v.vhdx": b"vhdxfile" + bytes(600),
                  "k.vmdk": b"KDMV" + bytes(600),
                  "q.qcow2": b"QFI\xfb" + bytes(600),
                  "dyn.vhd": b"conectix" + bytes(600)}
@@ -92,8 +91,6 @@ class SplitImages(TempDirCase):
             with self.assertRaises(EvidenceError, msg=name) as ctx:
                 image.describe(image.discover_segments(path))
             self.assertIn("not", str(ctx.exception).lower())
-        with self.assertRaisesRegex(EvidenceError, "native reader is planned"):
-            image.describe([self.tmp / "e.E01"])
 
     def test_a_fixed_vhd_is_its_disk_plus_a_footer(self):
         path = self.tmp / "fixed.vhd"

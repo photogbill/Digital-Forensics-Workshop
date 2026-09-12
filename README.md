@@ -34,7 +34,7 @@ Offline, standard library only, and usable on its own from the command line.
 
 | | |
 |---|---|
-| **Disk images** | RAW/DD as one file or a split set (`.001…`, `.aa…`), read through the same read-only door. A set that is incomplete, has a gap, or is opened part-way through is refused. **A container that is not raw — E01, AFF, VHDX, VMDK, QCOW, a dynamic VHD — is refused by its signature, with the reason**; reading one as raw would put every partition at the wrong offset while looking right. E01 and the virtual disk containers are to be read natively by default; the libraries that read them are licence-permitted (LGPL) but native is the choice, for the offline property. A fixed VHD is accepted with its footer excluded, and says so. The whole disk and each segment are hashed in one read. |
+| **Disk images** | RAW/DD as one file or a split set (`.001…`, `.aa…`), read through the same read-only door. A set that is incomplete, has a gap, or is opened part-way through is refused. **EnCase E01/EWF is read natively** — sections, geometry, the base-offset table and zlib chunks decoded to one raw stream so partitions/NTFS/carving are unaware it was compressed (verified on a real 20 GB image). Other containers that are not raw — Ex01, AFF, VHDX, VMDK, QCOW, a dynamic VHD — are refused by their signature, with the reason; reading one as raw would put every partition at the wrong offset while looking right. A fixed VHD is accepted with its footer excluded. The whole disk and each segment are hashed in one read; for E01 the disk hash is of the decompressed stream. |
 | **Partition tables** | MBR with the extended chain (loop-protected) and GPT. Header and array CRCs and the backup GPT are checked; a tampered primary array is read from the intact copy and the altered entries are named. Overlaps, partitions past the end of the image, hybrid and missing protective MBRs are reported. Unpartitioned space is listed as regions, and a volume boot sector found in one is called out. |
 | **NTFS** | Every MFT record: update sequence fixups *checked* (a torn record says so), attributes and data runs bounds-checked, attribute lists followed into extension records, sparse and fragmented streams read back, alternate data streams listed. Compressed and EFS-encrypted content is refused rather than returned as garbage. |
 | **Deleted entries** | A deleted record's name, times, runs and — measured against `$Bitmap` — how many of its clusters are now allocated to something else. Paths are rebuilt from `$FILE_NAME` and checked against each parent's sequence number, so a file whose folder's record was reused is shown as orphaned, not inside a stranger. |
@@ -43,6 +43,16 @@ Offline, standard library only, and usable on its own from the command line.
 | **Slack** | The tail of each file's last cluster; regions holding data are indexed with the text found in them. |
 | **Carving** | JPEG, PNG, GIF, BMP, PDF, ZIP/OOXML, SQLite, RIFF, OLE2, PE, MP4/MOV/HEIF, gzip and 7-Zip, over a whole image, a volume, a gap, or **a volume's unallocated clusters only**. **Every result is a candidate** with the basis of its length (`structure`, `footer`, `capped`) and a status (`complete`, `truncated`, `capped`). |
 | **Preview, then recover** | Previews read into memory and write nothing. Recovery needs a reason, hashes what it writes, and records in custody *how* the bytes were found. |
+
+## What Phase 3 begins — DOMEX over a disk image
+
+| | |
+|---|---|
+| **Documents** | OOXML (docx/xlsx/pptx) core and app properties, OpenDocument `meta.xml`, and a PDF `/Info` scan: author, title, the created and modified times, the producing application. Dates the format wrote with a zone are decoded to UTC; the raw string is kept beside them. Legacy OLE2 (`.doc`/`.xls`) is catalogued by type and named as not-yet-mined, never guessed. |
+| **Images** | JPEG (APP1) and TIFF **EXIF, including the whole GPS IFD** — latitude and longitude as **signed degrees** (west and south negative), altitude, and the GPS timestamp, which the EXIF specification defines as UTC. Camera make and model too. This is what the forensic geospatial view reads. |
+| **Email** | EML (one RFC 822 message) and mbox (many): from / to / cc / subject / date / message-id and attachment names, **one artefact row per message**, the Date header decoded to UTC. Outlook PST/OST is detected and named as not-yet-parsed. |
+
+Every result lands in the case's `artefacts` index as a timeline-ready row — the corpus the hunt engine and the contact/geospatial views run over (you need parsed rows before you can hunt them). DOMEX reads a file's bytes straight out of the NTFS volume through the same read-only door as everything else, parses the metadata in memory, and **writes nothing to disk**. A row's `at_utc` is the file system's *measured* modified time; the times a document or camera wrote about itself are authored values, kept in `detail` with their epoch named and never quietly promoted into the UTC column. Run `ntfs` on a volume first, then `domex`.
 
 `python -m forensics_workshop capabilities` prints the full table: what is
 built, what is planned and in which phase, which third-party packages are
@@ -79,6 +89,8 @@ python -m forensics_workshop candidates    D:\cases\OP-1 E002 --status complete 
 python -m forensics_workshop carve-preview D:\cases\OP-1 E002 17 --examiner "Name"
 python -m forensics_workshop carve-recover D:\cases\OP-1 E002 17 --reason "..." --examiner "Name"
 python -m forensics_workshop slack         D:\cases\OP-1 E002 --volume 2 --examiner "Name"
+python -m forensics_workshop domex          D:\cases\OP-1 E002 --volume 2 --examiner "Name" [--categories image,document,email] [--path Users] [--limit N]
+python -m forensics_workshop domex-list     D:\cases\OP-1 E002 --examiner "Name" [--kind image] [--geo] [--search "..."]
 ```
 
 `--examiner` is required wherever a case is opened, because opening a case is
@@ -117,7 +129,7 @@ ATK finds the package in `vendor\Digital-Forensics-Workshop` (where
 `..\Digital Forensics Workshop`. It probes `import forensics_workshop` through
 `atk/ui/subsystem.py`, and reports one of three states: **not installed**,
 **installed but ATK's adapter failed**, or **loaded but the panel failed to
-start**. A missing capability, such as no E01 reader yet, is not a failure;
+start**. A missing capability, such as no Ex01 reader yet, is not a failure;
 the workspace's Capabilities page lists it.
 
 ATK keeps only an index of where cases are, plus each case's custody head as

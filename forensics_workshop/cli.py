@@ -29,6 +29,8 @@
     python -m forensics_workshop carve-preview CASE E002 ID --examiner NAME
     python -m forensics_workshop carve-recover CASE E002 ID --examiner NAME --reason TEXT
     python -m forensics_workshop slack         CASE E002 --volume N --examiner NAME
+    python -m forensics_workshop domex         CASE E002 --volume N --examiner NAME [--categories image,document,email] [--path Users] [--limit N]
+    python -m forensics_workshop domex-list    CASE E002 --examiner NAME [--kind image] [--geo] [--search TEXT]
     python -m forensics_workshop volume      PATH
     python -m forensics_workshop usb-policy  status | on | off
     python -m forensics_workshop probe-write FOLDER --i-confirm-this-is-not-evidence
@@ -52,6 +54,7 @@ import sys
 from . import __version__, blocker, capabilities as caps
 from . import carve as _carve
 from . import diskimage as _disk
+from . import domex as _domex
 from . import manifest as _manifest
 from . import verify as _verify
 from .artefacts import browser as _browser
@@ -371,6 +374,30 @@ def cmd_slack(args) -> int:
     return 0 if summary.state == "completed" else 1
 
 
+def cmd_domex(args) -> int:
+    case = _open(args)
+    categories = [c.strip() for c in args.categories.split(",") if c.strip()] \
+        or _domex.DEFAULT_CATEGORIES
+    summary = _domex.analyse_volume(
+        case, args.evidence, args.volume, categories=categories,
+        path_prefix=args.path, limit=args.limit, max_file_mb=args.max_file_mb,
+        progress=_progress)
+    _print(summary.as_dict())
+    return 0 if summary.state == "completed" else 1
+
+
+def cmd_domex_list(args) -> int:
+    case = _open(args)
+    rows, total = _domex.list_domex(case, args.evidence, artefact=args.kind,
+                                    geo_only=args.geo, search=args.search,
+                                    limit=args.limit)
+    for r in rows:
+        print(f"{r['at_utc'] or '(no time)':28} {r['artefact']:9} "
+              f"{r['title'][:40]:40} {r['value']}".rstrip())
+    print(f"\n{len(rows)} shown of {total}")
+    return 0
+
+
 def cmd_volume(args) -> int:
     _print(blocker.volume_state(args.path).as_dict())
     return 0
@@ -524,6 +551,21 @@ def build_parser() -> argparse.ArgumentParser:
     sl = with_case("slack", cmd_slack, "scrape file slack on an NTFS volume",
                    evidence=True)
     sl.add_argument("--volume", type=int, required=True)
+    dx = with_case("domex", cmd_domex,
+                   "mine documents, images (EXIF/GPS) and email on a volume",
+                   evidence=True)
+    dx.add_argument("--volume", type=int, required=True)
+    dx.add_argument("--categories", default=",".join(_domex.DEFAULT_CATEGORIES),
+                    help=f"comma-separated, from: {', '.join(_domex.CATEGORIES)}")
+    dx.add_argument("--path", default="", help="only files under this path")
+    dx.add_argument("--limit", type=int, default=0, help="0 = no limit")
+    dx.add_argument("--max-file-mb", type=int, default=512)
+    dl = with_case("domex-list", cmd_domex_list, "list mined DOMEX artefacts",
+                   evidence=True)
+    dl.add_argument("--kind", default="", choices=["", *_domex.ARTEFACT_KINDS])
+    dl.add_argument("--geo", action="store_true", help="only geotagged rows")
+    dl.add_argument("--search", default="")
+    dl.add_argument("--limit", type=int, default=200)
 
     vol = sub.add_parser("volume", help="is this volume read-only?")
     vol.add_argument("path")

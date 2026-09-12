@@ -27,8 +27,9 @@ A logical folder is registered by path, hashed in place through
 `blocker.open_evidence`, and the sidecar records the volume it was on and
 whether that volume was read-only at the time. A disk image is registered
 the same way — by the path of its first segment, with every segment named in
-the sidecar — after its signature has been checked, so a container that is
-not a raw disk (E01, VHDX, VMDK) is refused before anything reads it as one.
+the sidecar — after its signature has been checked, so E01/EWF is decoded
+natively and a container that cannot be read (Ex01, VHDX, VMDK) is refused
+before anything reads it as raw.
 """
 
 from __future__ import annotations

@@ -26,9 +26,9 @@ class Capabilities(unittest.TestCase):
 
     def test_the_phase_two_file_system_layer_is_built_and_loads(self):
         for cid in ("raw", "partitions", "ntfs", "timestomp", "usnjrnl",
-                    "slack", "carving", "fde-detect"):
+                    "slack", "carving", "fde-detect", "ewf"):
             self.assertEqual(self.rows[cid].status, "available", self.rows[cid])
-        for cid in ("fat", "ewf", "vdisk", "ext4"):
+        for cid in ("fat", "vdisk", "ext4"):
             self.assertEqual(self.rows[cid].status, "planned", self.rows[cid])
         self.assertIn("synthetic", self.rows["usnjrnl"].note,
                       "the journal has not met a Windows-written $J yet, and says so")
@@ -140,7 +140,9 @@ class LicenceRule(unittest.TestCase):
 
     def test_what_they_would_have_read_is_native_by_default(self):
         # native default; a permitted library named in the note, not used
-        for cid in ("ewf", "vdisk", "vss", "ese"):
+        self.assertEqual((self.rows["ewf"].how, self.rows["ewf"].status),
+                         ("native", "available"), "E01 is built now")
+        for cid in ("vdisk", "vss", "ese"):
             self.assertEqual((self.rows[cid].how, self.rows[cid].status),
                              ("native", "planned"), cid)
         self.assertEqual((self.rows["memory"].how, self.rows["memory"].status),
@@ -151,11 +153,11 @@ class LicenceRule(unittest.TestCase):
                          ("third-party", "deferred", "pyfsapfs"))
         self.assertTrue(capabilities.licence_permits(apfs.licence))
 
-    def test_the_e01_refusal_names_the_native_plan_not_a_licence_question(self):
+    def test_e01_is_read_natively_and_only_ex01_is_refused(self):
         from forensics_workshop import image
-        for key in ("ewf", "ewf2"):
-            self.assertIn("native", image.CONTAINERS[key])
-            self.assertNotIn("question", image.CONTAINERS[key])
+        self.assertNotIn("ewf", image.CONTAINERS, "E01 is read, not refused")
+        self.assertIn("ewf2", image.CONTAINERS)
+        self.assertIn("natively", image.CONTAINERS["ewf2"])
 
     def test_the_plan_records_the_rule(self):
         text = (ROOT / "FORENSICS_PLAN.md").read_text(encoding="utf-8")
