@@ -39,6 +39,9 @@ BY_DESIGN = {
     "review:confirmed":
         "the admitted-findings view the report and contact graph will read; "
         "neither surface is built yet (FORENSICS_PLAN §10)",
+    "media.lab:capability_note":
+        "called by capabilities() through getattr on the imported module — "
+        "a hook a name walk cannot follow; the capabilities verb reaches it",
 }
 
 

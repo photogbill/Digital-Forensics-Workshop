@@ -52,6 +52,39 @@ review — unattended ease of use without a finding no human stood behind. CLI
 `auto` / `findings` / `confirm` / `reject`. This is the frame the §10 hunts and
 contact graph plug into next.
 
+**Planned 2026-09-30 — media recovery (§12), nothing built yet.** Bill's new
+direction: pull a faint voice out of a radio transmission, recover what a
+background speaker says in a phone recording before the clip cuts off (including
+when the picture goes dark), and bring out detail in photos and video, shadows
+included, without inventing it. Not for court — *"that recovery can save a
+life."* §12 is the spec: five trust tiers on every output, replayable recipes,
+a faithful lane that feeds decisions and a labelled generative lane that only
+proposes, **Meta's SAM Audio run through audio.cpp as an owner-approved licence
+exception**, and a validation harness built before any model is trusted. The
+tool survey behind it is `research/media_recovery_tools_2026-09-30.md`.
+
+**Media — SAM Audio built 2026-10-05, not yet run on Windows.** Bill: *"Let's
+go ahead and build in SAM for forensics as well."* Built: the
+`forensics_workshop/media/` subpackage — the five tiers and replayable recipes
+(§12.2–12.3) with a sidecar beside every output; the generic prompted-separator
+interface; the SAM adapter over **audio.cpp v0.9.0**'s `audiocpp_cli`, always a
+subprocess, with flags checked against that tag's own docs (§12.9); input from
+any audio or video file (FFmpeg extraction as a measured step, the original
+read once through the read-only door); several seeds and **where they
+disagree**; `.invented` in every SAM filename; outputs only in the case with
+`media.started/derived/failed` custody; pinned-hash weights (unpinned = "weights:
+unverified (parity not run)", a different file = refused); the negative-control
+hook (§12.12); SAM as a named **owner exception** in `capabilities`; CLI
+`media-sam/-list/-replay/-pin/-weights/-negative-control`. In ATK: the **Media
+Lab** page (tenth, after Findings), run inside the AI queue, players on the
+audio-focus bus; `get_sam.bat` builds the runtime and fetches the weights. 90
+new engine tests, all through a FAKE `audiocpp_cli` — **no real SAM run, no
+parity check, no negative control on real noise, and no VRAM or speed figure on
+the 3080 Ti yet.** Hardened the same day after an independent review (odd
+WAVs through FFmpeg, invented inputs tracked by name and hash, pins matched by
+hash, tool-floored tiers, child-process writes guarded, broken stems refused,
+crash codes in words). Details and the unproven list: §12.9 and §12.14.
+
 `python -m forensics_workshop capabilities` lists what is built, what is not,
 and which routes the licence rule excludes.
 
@@ -189,7 +222,10 @@ against the Midas BLUE layouts and the stdlib OSM PBF reader.
 | EXIF / document metadata | **native** (PIL + existing `forensics.py`) | already partly built |
 | Steganalysis (LSB, chi-square, RS) | **native** | `forensics.py` already does ELA and noise fingerprinting; this is an extension of work that exists |
 | OCR | **existing `ocr.py`** | already in ATK |
-| Audio transcription | **existing Whisper path** | already in ATK |
+| Audio transcription | **existing Whisper path**; consensus across ASR families planned (§12.6) | already in ATK. Whisper writes text on silence and noise, so a word counts only when two model families agree |
+| Audio recovery (faint radio voice, background speech) | **native DSP** (atkdsp kernels) + permitted models in separate processes — PLANNED §12 | the faithful lane recovers or fails visibly; generative separators (SAM Audio) are labelled leads |
+| Photo / video detail and shadow recovery | **native** multi-frame + permitted regressive models — PLANNED §12.8 | real detail comes from more frames and richer sources (RAW, gain maps), not bigger priors |
+| Damaged / truncated media repair | **native** (ISOBMFF, H.264/HEVC NAL, ADTS/Ogg/AMR/MP3 framing) + untrunc arm's-length — PLANNED §12.7 | the tail of an interrupted recording is usually still in `mdat`; only the index is missing |
 | Memory (RAM) analysis | **deferred** | **no licence-permitted route**: Volatility 3 (its own copyleft licence) and MemProcFS (AGPL-3.0) both reach our source. Native, if it earns its place after Phase 4 — with its own symbol-table problem |
 | Super timeline | **native** merge | the merge is easy; the parsers above are the work |
 | Encrypted volume *detection* | **native** | signatures for BitLocker/LUKS/FileVault are identifiable |
@@ -250,6 +286,17 @@ Where each library the plan first named now stands:
 | pyfsapfs (libfsapfs) | LGPL-3.0-or-later | **permitted** | APFS — the one place the library IS the plan, when built |
 | Volatility 3 | Volatility Software License 1.0 | **excluded** | memory deferred |
 | MemProcFS; Fox-IT dissect.evidence | AGPL-3.0 | **excluded** | not used, and not a source to copy from |
+
+**Media recovery (§12) brings its own licence table (§12.10) and two
+changes to how the rule is applied.** CC-BY-4.0 (attribution only; several
+speech-recognition and diarization models) joins the permissive tier — it does
+not restrict commercial use. And the rule gains its first **owner exception**:
+SAM Audio's weights carry Meta's SAM License, which permits commercial use but
+bans military/warfare, espionage and ITAR-controlled end uses. Bill accepted it
+on 2026-09-30 — *"if it goes to defense related work, we'll replace or remove
+it then."* An exception is never a silent allowlist entry: it is recorded with
+its reason and its removal trigger, shows as such in `capabilities`, and sits
+behind one adapter so removing it removes nothing else.
 
 Only the two excluded rows appear as **excluded** in the capability table,
 each with the licence that fails; `tests/test_capabilities_packaging.py` holds
@@ -504,6 +551,7 @@ Digital-Forensics-Workshop/
         domex/                 metadata, stego, ocr bridge, transcript bridge
         timeline/              events, merge, export
         report/                markdown, docx, IOC export
+        media/                 recovery recipes, trust tiers, residuals, model adapters (§12)
     tests/                     runs standalone, no ATK, no Qt
     samples/                   synthetic images built by script, never real evidence
 ```
@@ -804,7 +852,8 @@ use and can run with nobody present. The reframe that keeps it defensible —
    truncated `moov` index — the external answer is **untrunc** (rebuild from a
    healthy reference clip); `ffprobe`/GPAC map the structure. FFmpeg/untrunc/GPAC
    are copyleft → optional, separately-fetched, arm's-length (the §1.1 pattern);
-   the integrity map itself stays native/stdlib.
+   the integrity map itself stays native/stdlib. **Expanded into a native
+   repair engine in §12.7** (2026-09-30).
 
 Build order chosen by Bill: **the runbook + review queue first (done)**, then
 **the ATK usability pass — the Run-everything button, the Findings/review page,
@@ -816,3 +865,696 @@ in-workspace**, the **live device / SD-card reader**, and the **damaged-video
 forensics** (with its shared FFmpeg media layer). The **local-LLM hunt layer**
 (item 1, = §10) is the higher strategic arc and now has the review queue to
 file into.
+
+---
+
+## 12. Media recovery — faint voices, background speech, detail in the dark (Bill, 2026-09-30)
+
+Bill's words: clean up static from videos, enhance audio *"to include audio
+recovery,"* remove audio artefacts — *"if a radio transmission comes in but the
+voice is too faint to hear, I'll run it through processing to try and break it
+out"* — and *"maximize details in photos and videos visually, without
+introducing many artifacts … shadow recovery."* Then phones: a video someone
+sends, where *"you are trying to figure out what the person in the background
+is saying before it's cut off"* — and *"what if the video goes dark and it's
+just the audio?"*
+
+**This is not for court.** *"I realize it's not evidence for trial … but
+sometimes, that recovery can save a life."* That loosens most rules and
+tightens one. A court excludes an invented pixel; a rescue team acts on it. If
+a generative model turns a faint "four-seven" into "four-one", nobody objects —
+the aircraft goes to the wrong grid. So generative tools are allowed, and the
+one hard rule is: **an invented syllable must never look like a recovered
+one.**
+
+The tool survey behind this section — every licence checked against §1.1,
+every method rated for invention risk, sources inline — is
+`research/media_recovery_tools_2026-09-30.md`.
+
+### 12.0 Decisions (Bill, 2026-09-30)
+
+- **Purpose: investigative leads and lifesaving recovery, not evidential
+  analysis.** SWGDE's December 2025 video best practice names exactly this
+  category ("investigative lead"); its August 2025 audio best practice is the
+  first to admit trained neural filters, provided they are *tested before use*
+  (§12.12).
+- **Generative tools are in**, behind the tier labels of §12.2.
+- **SAM Audio goes in** (§12.9), as an owner exception to §1.1. *"If it goes to
+  defense related work, we'll replace or remove it then."*
+- **Hardware: RTX 3080 Ti with 16 GB** (Bill confirmed). Every model choice
+  below is sized to 16,384 MiB of VRAM and 64 GB of system RAM.
+- **Offline.** Nothing leaves the machine; every model is local.
+- **The original is never touched.** Everything is a derived item reached
+  through the read-only door, with a recipe that regenerates it.
+
+### 12.1 Where the decibels and the pixels actually come from
+
+You cannot recover what was never captured, but there is almost always more
+captured than anyone can hear or see. In order of leverage:
+
+1. **More observations of the same thing** — video frames, KrakenSDR channels,
+   several receivers, a caller who repeats the message. Real information, no
+   invention.
+2. **Going back upstream of the lossy step** — I/Q before the FM discriminator
+   (below threshold the discriminator turns weak voice into clicks, and that is
+   lost from the audio), RAW before JPEG, the phone's original file before the
+   messaging app re-encoded it.
+3. **Polishing the final audio or pixels** — the smallest lever, and where
+   nearly every tool on the market works.
+
+The build follows that order where the hardware allows (§12.13).
+
+### 12.2 Five trust tiers on every output
+
+| tier | what | can it add content? | examples |
+|---|---|---|---|
+| **Measured** | simple level, tone and geometry operations | no | gain, EQ, levels, gamma, crop, rotate, field split |
+| **Recovered** | more data combined | adds *real* information | frame stacking, drizzle, beamforming, diversity combining, re-demodulation from I/Q, file index rebuild |
+| **Cleaned** | deterministic non-linear removal | no — but can remove real detail | spectral noise reduction, notches, de-click, deconvolution, temporal median |
+| **Inferred** | discriminative / mask models | rarely; a learned prior shapes what is kept | DeepFilterNet, ClearerVoice MossFormer2, SepFormer, Restormer, NAFNet, HAT |
+| **Invented** | generative models | **yes** | SAM Audio, UniPASE/GAP-URGENet/Sidon, bandwidth extension, GAN/diffusion upscaling, face restoration, inpainting |
+
+- **An output carries the highest tier of any step in its recipe.** One
+  generative step makes the whole chain Invented.
+- **Invented output is labelled where a person meets it**: a banner burned into
+  every frame of an image or video; `.invented` in an audio filename; the tier
+  in the sidecar, in the custody note, and as a badge in every ATK view that
+  plays or shows it. The model's own watermark is not relied on (audio.cpp
+  v0.9.0's SAM session passes a 32-bit message into its decoder, so its output
+  may carry one; nothing relies on it either way).
+- **Readings come from the faithful lane.** A transcript word, a plate
+  character or a bearing that exists only in Invented output is shown as such
+  and filed as a proposal; it becomes a reading only when a faithful-lane output
+  or a second, independent method agrees (§12.6).
+- **Every step saves its residual** — what it removed. For audio the residual
+  is a playable stem: if you hear words in it, the filter ate speech. For
+  images it is a difference map: structure in it means real detail went out.
+- **Two lanes, side by side.** The Media Lab (§12.11) shows the faithful result
+  next to the generative one, and **where they disagree is where the model is
+  guessing**. Agreement is not proof; disagreement is a measured warning.
+
+### 12.3 Recipes, not renders
+
+Every derived item is a **recipe**: an ordered list of steps, each with its
+parameters, tool name and version, model file SHA-256, random seed, region of
+interest and time range, plus the SHA-256 of the input and of the output.
+Running the recipe against the untouched original regenerates the output, so
+step 3 can be changed without redoing 1–2 and two variants can be A/B'd. It is
+the same idea as Amped FIVE's project files and its 2025 filter presets.
+
+- **Forensic door:** the derived item lives in the case folder (evidence and
+  cases live outside ATK, §0.2), with a custody event naming the recipe and
+  tier. `blocker.WRITERS` gains the media writer; the AST ratchet still holds.
+- **Radio door:** results live inside ATK at `<ATK>/data/recovery/`, beside the
+  `audio_cuts` sidecar they came from — Bill's storage rule (results inside the
+  ATK folder, never in temp or the Windows profile).
+- **GPU work is not bit-exact.** A replay states the tolerance it was checked
+  to; CPU paths and seeded generative runs are replayed exactly where possible.
+
+### 12.4 The radio door — a voice too faint to hear
+
+**Inputs**, all of which ATK already has or has planned: an `audio_cuts` cut
+with its `SignalContext` sidecar (demodulated audio); a pre-demodulation I/Q
+clip from the DVR buffer (the waterfall's planned *Export pre-D I/Q*); a
+coherent five-channel KrakenSDR clip (atkdf's build plan). Entry point: right-click
+**Recover this transmission** on the waterfall selection or an `audio_cuts`
+row.
+
+**a. Re-demodulate from I/Q (Recovered, native in atkdsp).** Offline means
+non-causal — the demodulator may look ahead, which no live radio can.
+- A channel filter fitted to the **measured** occupied bandwidth, not the
+  channel plan. Zero risk, first step.
+- PLL and FM-feedback demodulators: published threshold extension of about
+  2–3 dB and 5–7 dB respectively.
+- **An extended-Kalman FM demodulator with a Rauch–Tung–Striebel or fixed-lag
+  smoother** (Einicke). Simulated: about 12 dB lower mean-squared error than
+  the discriminator at 7.5 dB SNR. **Unmeasured on real voice** — measuring it
+  on Bill's bladeRF captures is part of the work.
+- Click suppression by IF-amplitude weighting, after the description of
+  ka9q-radio's FM threshold mode (GPL — the idea is reimplemented, the code is
+  never read into ours).
+- Synchronous AM with sideband selection; liquid-dsp (MIT) is the permitted
+  reference.
+
+**b. Listen along the bearing (Recovered, KrakenSDR).** The open Kraken stack
+uses its five coherent channels only to *find* direction; nothing open uses
+them to *listen*. An MVDR/LCMV beamformer on the calibrated coherent clip,
+steered at the bearing *DF the selection* produced, with nulls on co-channel
+interferers: up to about 7 dB of array gain against receiver noise (10·log₁₀5 —
+arithmetic, not yet measured on Kraken voice), plus separation of two stations
+on one frequency at different bearings. The beam output feeds (a). Menu item
+**Listen along the bearing**, beside *DF the selection*. Kernel in atkdsp;
+calibration and steering from atkdf.
+
+**c. Several receivers, and repeats (Recovered).** Receivers that are not
+phase-coherent (bladeRF plus KiwiSDRs) combine after demodulation: coarse
+alignment from the KiwiSDR's GPS timestamps, fine alignment by
+cross-correlation, then select or SNR-weight each time–frequency tile. On
+analog FM the **CTCSS tone** is a free constant-level pilot — its SNR is a
+per-receiver, per-moment quality weight that does not depend on the speech.
+A caller who repeats the message (mayday three times, position twice) is
+combined at the word level by the consensus transcript (§12.6), since repeats
+are never sample-identical.
+
+**d. Classical audio chain (Cleaned, atkdsp kernels).** Band-limit to voice;
+adaptive notches for hum and heterodyne whistles; impulse (click) detection
+with autoregressive gap interpolation; MMSE log-spectral noise reduction;
+then speech-level normalisation, which lifts faint syllables to the level of
+loud ones and is often the biggest single win for a human ear.
+**The noise profile comes from pauses *inside* the transmission** (carrier up,
+mouth closed), **never from before key-up or the squelch tail**: with no
+carrier the discriminator's output is louder and differently shaped (the same
+physics that inverted the old audio squelch — see ATK's channel-gate notes),
+so a no-carrier profile over-subtracts and eats speech.
+
+**e. Neural noise reduction (Inferred).** DeepFilterNet3 (standalone Windows
+binary, 48 kHz in), RNNoise, GTCRN (ONNX via sherpa-onnx), ClearerVoice
+FRCRN/MossFormer2. **All are trained on microphone noise, not NBFM radio**:
+none is trusted on radio until the harness (§12.12) has run it on Bill's own
+off-air noise. The strongest radio-specific result is WDSP 2.10's NNR
+(September 2026; trained on 85 real off-air HF noise recordings with speech
+pushed through a real SSB transmitter; +4.3/+4.9 dB reported by its developer)
+— GPL, so its **recipe** is the lesson: a model of our own trained the same way
+on off-air VHF/UHF noise (§12.13, increment 9).
+
+**f. Digital voice (DMR, P25, NXDN).** The audio out of a vocoder is
+re-synthesised from parameters; denoising it has no demonstrated benefit and is
+**not built**. Every gain is upstream of the vocoder: soft-decision decoding of
+the Golay/Hamming-protected voice bits (dsd-neo and mbelib-neo, GPL, already
+ATK's arm's-length DSD path), plus (b) and (c). DMR's AMBE+2 carries patent
+exposure whatever the code licence. Encrypted voice stays encrypted — not a
+goal.
+
+### 12.5 The phone door — the person in the background, before the cut
+
+**Step 0 — get the original file.** It matters more than any model.
+- iPhone 16-generation Spatial Audio video carries a stereo AAC track **and a
+  four-channel first-order ambisonic track** in Apple's APAC codec. Direction
+  is a separation cue that needs no light and no model. **No open APAC decoder
+  exists** (FFmpeg's `apac` is an unrelated codec); Apple's Audio Mix on an
+  Apple device (iOS 26 / macOS 26) is the only route today, rendering a speech
+  stem and an ambience stem — render both, because a background talker can land
+  in "ambience".
+- Messaging apps re-encode. The only forensic test found (WhatsApp, 2020) saw
+  large/HD Android files fully re-encoded. Ask for the original by AirDrop,
+  "send as document" or cable, and **record on the item which form we have**
+  (original vs. messaging copy).
+
+**Step 1 — repair if cut off** (§12.7). The tail is usually still in the file.
+
+**Step 2 — separate, faithful lane (Inferred).** ClearerVoice-Studio
+(MossFormer2 separation and enhancement), SpeechBrain SepFormer-WHAMR16k (noisy,
+reverberant two-talker; 13.5 dB SI-SNRi on WHAMR!), TIGER. Their failure is
+leakage, not invention. When the speaker's face is on screen,
+**AV_MossFormer2_TSE** extracts that person's voice using the face (Apache-2.0
+code and weights). Expect a real drop on a stranger's phone: in the SLT 2026
+REAL-TSE challenge, speaker similarity fell from about 0.50–0.55 to 0.36–0.39 on
+unseen devices.
+
+**Step 3 — prompted extraction, generative lane (Invented).** SAM Audio
+(§12.9): text ("man speaking in the background"), a mask on the person in
+frame, or **time anchors** — `+` where the wanted voice is audible, `−` where
+the unwanted one is. Runs several seeds; disagreement is shown (§12.2).
+
+**Step 4 — when the picture goes dark.** Video is a cue, never a requirement.
+- **Time anchors are audio-only.** Mark half a second of the background talker
+  (`+`) and half a second of the foreground talker (`−`); text prompts also need
+  no picture. Anchor on a stretch where the target is alone or loudest — Meta's
+  paper flags anchors as ambiguous where voices overlap.
+- **Learn the voice while it can be seen; follow it into the dark.** Put the
+  `+` anchor (or the visual mask) in the lit stretch and run the whole clip in
+  one pass; the separation carries that voice through the dark part. The
+  faithful-lane twin: cut a clean reference from the lit stretch, use it for
+  audio-only target-speaker extraction (ClearerVoice), and check segment by
+  segment with speaker-embedding similarity which dark-section speech is the
+  same person.
+- **Why it went dark changes the fix.** Low light: the frames often still hold
+  lips or position — run the shadow chain (§12.8). Pocket or face-down: fabric
+  muffles the consonants and adds rubbing, so a compensating EQ plus
+  click/crackle removal (Cleaned, deterministic) is worth more than any model.
+  Video track corrupt but audio intact: the repair engine recovers the audio
+  frames on their own (§12.7).
+- **Direction works in the dark.** APAC via Apple, as above; ordinary phone
+  stereo carries weak direction cues, but a classical two-microphone
+  time/level-difference mask is cheap to try (Cleaned).
+
+**Step 5 — transcribe** with the consensus rules of §12.6.
+
+### 12.6 The consensus transcript — shared by both doors
+
+The transcription step carries the highest invention risk in the chain.
+Measured: Whisper large-v3 wrote text on 61.9% of silent clips, 97.0% of music
+and 89.9% of non-speech (September 2026); "Careless Whisper" found invented
+phrases in about 1% of transcripts. A clip that cuts off mid-sentence invites
+exactly that kind of plausible completion. And **full enhancement often makes
+ASR worse** — Whisper's error is U-shaped in enhancement strength, and noisy
+audio beat denoised audio in all 40 configurations of one 2025 study, because
+processing artefacts, not residual noise, do the damage.
+
+Rules:
+- **ASR runs on several inputs**: the raw audio, a *partially* enhanced version
+  (the enhanced signal with a scaled copy of the original mixed back —
+  "observation adding"), and each separated stem. Never only on the fully
+  cleaned one.
+- **At least two ASR model families must agree** for a word to be shown as
+  agreed. Disagreement is amber. A word that appears only in Invented-tier
+  inputs is flagged invented.
+- **Words timed at or within half a second of the cut are flagged "at the
+  cut."** Per-word timing comes from a forced aligner.
+- **Guards on every run**: voice-activity gating, `no_speech_prob`, compression
+  ratio, `condition_on_previous_text` off.
+- **Models**: Whisper large-v3 (ATK's existing path, MIT); NVIDIA Canary-1b-v2
+  (CC-BY-4.0; publishes a noise curve: 2.18% WER clean, 19.38% at −5 dB) and
+  Parakeet-TDT-0.6B-v3 (CC-BY-4.0); Qwen3-ASR (Apache-2.0, model card to
+  confirm). Diarization: NVIDIA Sortformer v2 (CC-BY-4.0, up to four speakers);
+  pyannote community-1 (CC-BY-4.0, gated download). Most of these run in
+  audio.cpp (§12.9), Python-free.
+- **Output**: in a case, `transcript` rows in `artefacts` (original + translation,
+  tagged by task, per §11 item 3) carrying per-word agreement and tier; every
+  model-read word is a **proposal** into `review.py` with
+  `source="model:<name>"`. On the radio door, the Translation Log shows the
+  same colouring.
+- Content is checked against the noisy original by transcript agreement or
+  SpeechBERTScore (MIT) — **not** by DNSMOS-style quality scores, which in the
+  URGENT 2025 challenge scored hallucinated speech well (a generative enhancer
+  made low-SNR Japanese sound like English).
+
+### 12.7 Damaged, truncated and deleted media files
+
+The mechanical fact behind "before it's cut off": a non-fragmented MP4, MOV or
+M4A writes its samples into `mdat` as it records and its index (`moov`) only
+when recording stops. A crash, a dead battery or a killed app leaves the data
+and loses the index. Apple's capture API writes movie fragments every 10 s by
+default, so a fragmented recording is playable up to the last fragment (whether
+Apple's own Camera app uses that setting is undocumented). An interrupted Voice
+Memo has been recovered in full — 19 min 32 s — by rebuilding the sample tables.
+No study quantifies how many seconds phones lose to unflushed buffers.
+
+**Native, stdlib-only (Recovered)** — in the engine proper, beside §11 item 5's
+integrity map:
+- Box walker and **`moov` / fMP4 rebuilder** from ISO/IEC 14496-12/-14.
+- **NAL scanner** for H.264/HEVC (Annex B and length-prefixed), with SPS/PPS
+  taken from a healthy reference clip from the same device and settings; with
+  no reference, candidate parameter sets generated and tested by decode
+  (Altinisik & Sencar: 11.3 decoding trials per video on average over 55K
+  videos).
+- **Audio framing resync**: ADTS AAC, MP3 frame chaining, AMR frame tables, Ogg
+  page CRC resync (WhatsApp voice notes are plain Ogg Opus), WAV header rebuild.
+- **Read past the recorded end.** On a card or phone image, valid frames can
+  continue into the clusters after the length the file system recorded; carve
+  them (mp4fixer's author targets exactly "the last half second").
+- Later: a native Hikvision/Dahua DVR frame carver from the published
+  structures (a November 2025 paper recovered 91.8% of video across 27 drives,
+  ahead of commercial tools; no code released).
+
+**Arm's length**: FFmpeg as the decode oracle (`-fflags +genpts+discardcorrupt`,
+`ignidx`), already fetched at install; **untrunc** (anthwlock fork, GPL-2.0,
+Windows builds 2026) as the reference-file fallback, fetched the same way.
+remoover (ISC) is a permitted design reference for H.264 + ADTS AAC rebuilds.
+
+**Not built**: frame inpainting. The strong inpainters are non-commercial
+(ProPainter, E2FGVI) or invent pixels (DiffuEraser, VACE); FFmpeg's error
+concealment, with every concealed frame marked, is more truthful.
+
+**Phone specifics**: Signal attachments are AES-encrypted `.mms` blobs keyed in
+the Android Keystore — carving yields ciphertext without a full file-system
+extraction, and recovering that key is not in scope. iOS Recently Deleted keeps 30 days; Google
+Photos' trash dropped from 60 to 30 days on 2026-09-04. iLEAPP/ALEAPP (MIT) are
+permitted parser references for §9.
+
+### 12.8 The visual door — detail and shadows without invention
+
+**Faithful lane:**
+- **Richest source first.** RAW (DNG, CR2, NEF, ARW, ProRAW) through rawpy
+  (MIT) over LibRaw (LGPL-2.1/CDDL): 12–14 bits, so shadow recovery is real
+  recovery. Phone photos carry an **HDR gain map** (ISO 21496-1 / Ultra HDR /
+  Apple) — a second image with real highlight and tonal range that most tools
+  ignore — decoded by libultrahdr (Apache-2.0). DOMEX should extract the gain
+  map; an edit that updated the base image but not the gain map or the EXIF
+  thumbnail leaves a mismatch worth flagging.
+- **More frames.** Register (RAFT/SEA-RAFT, BSD-3, or native phase correlation)
+  and stack: random noise falls with √N, so 16 frames is about 4× cleaner. A
+  motion-compensated **temporal median** removes analog snow and static
+  outright — it differs every frame, the scene does not. Sub-pixel motion
+  allows multi-frame super-resolution: drizzle (STScI, BSD), Google's Handheld
+  Multi-Frame SR (MIT reimplementation), BSRT and Burstormer (MIT). Track a
+  region (plate, sign, face) and stack only that; keep the sharpest N frames
+  for shake or heat shimmer.
+- **Shadow lift without halos**: denoise first (chroma harder than luma); work
+  in linear light; split base and detail with a guided filter and compress only
+  the base; CLAHE on luminance; synthetic exposure fusion (+0/+2/+4 EV fused by
+  well-exposedness). Models: Retinexformer, HVI-CIDNet, DarkIR (all MIT;
+  NTIRE 2025–2026 low-light winners or their basis).
+- **Denoise / deblur**: Restormer, NAFNet (MIT), SCUNet, SwinIR (Apache-2.0);
+  video FastDVDnet (MIT), BasicVSR++ (Apache-2.0). Known-kernel deconvolution
+  (Wiener, Richardson–Lucy) — a point light smeared in the frame *is* the
+  motion kernel.
+- **Compression**: FBCNN (Apache-2.0), JDEC (BSD-3); Knusperli (Apache-2.0) —
+  **quantization-consistent JPEG decoding**, whose output re-encodes to the
+  identical coefficients, so it cannot contradict the file. Video: STDF, RFDA
+  (Apache-2.0).
+- **Interference and interlace**: a 2D FFT notch for rolling bars, RF hits and
+  moiré; split interlaced fields (each is a separate moment).
+- **Reading plates and text**: regressive SR (HAT, DAT, SwinIR, Apache-2.0),
+  then fast-alpr / fast-plate-ocr (MIT), PaddleOCR / PARSeq (Apache-2.0), with
+  **per-character voting across frames** — on UFPR-SR-Plates recognition rose
+  from 1.7% on raw low-resolution plates to 42.3% with five-frame voting.
+  (fast-alpr's detectors derive from YOLOv9, whose code is GPL-3.0 — weight
+  provenance to review before shipping.)
+
+**Generative lane (Invented, banner on every frame):** Real-ESRGAN (BSD-3) for
+viewing upscales; OSEDiff / DiffBIR (Apache-2.0 code; weights inherit Stable
+Diffusion terms — check before use); **SeedVR2-3B** (Apache-2.0 code and
+weights) and **FlashVSR** (Apache-2.0) for video, which fit 16 GB only through
+community nodes with quantisation, tiling and offload to the 64 GB of RAM.
+Invention is mapped by running several seeds and showing per-pixel variance,
+diffing against the regressive result, re-degrading the output and diffing it
+against the input, and stating the share of generated pixels.
+
+**Faces: no face-restorer output is ever used to identify anyone.** A face
+restorer paints a plausible face — in practice a different person — and in a
+missing-person search that is worse than a blurry real one. GFPGAN /
+RestoreFormer++ (Apache-2.0) may appear only in the generative lane, bannered;
+CodeFormer is excluded (S-Lab, non-commercial).
+
+### 12.9 SAM Audio through audio.cpp
+
+**What it is.** Meta's SAM Audio (December 2025) separates a sound selected by
+text, by a visual mask on something in frame, or by time anchors, using flow
+matching in a codec latent space — a **generative** separator, so every output
+is Invented tier.
+
+**Runtime: audio.cpp** (github.com/0xShug0/audio.cpp) — Apache-2.0 (ShugoAI LLC,
+2026), pure C++ on ggml, CUDA/Vulkan/CPU. **Pinned: v0.9.0** (2026-09-30,
+commit `795c45fbde0a7d29c93b22199728ff5caaec02e5`) — the first release with
+native SAM Audio (PR #711; this section first named v0.8.2, which predates it).
+Built from the **pinned source release** by ATK's `get_sam.bat`, the way ATK
+builds llama.cpp
+(`scripts\build_windows.ps1 -Preset windows-cuda-release -Target audiocpp_cli`,
+with `-ModelSet custom -Models sam_audio` unless `/full`).
+It has no Python binding or C API, so ATK calls `audiocpp_cli` or keeps
+`audiocpp_server` running: **a separate process**, so a CUDA fault takes down
+the worker, never ATK.
+
+**Weights: `audio-cpp/SAM-Audio-GGUF`** on Hugging Face (uploaded 2026-09-27,
+ungated; Meta's original checkpoints, not the undocumented `-tv` variants). Each
+GGUF bundles the SAM weights, the T5 text encoder (Apache-2.0), tokenizer and
+config. Publisher's figures, RTX 5090, 15-second clip, Large:
+
+| file | size | peak VRAM | on a 16 GB card |
+|---|---|---|---|
+| `sam-audio-large-f32.gguf` | 15.4 GB | 17,826 MiB | **does not fit** |
+| `sam-audio-large-bf16.gguf` | 7.7 GB | 12,092 MiB | fits — use when SAM has the GPU alone |
+| `sam-audio-large-q8_0.gguf` | 5.0 GB | 9,378 MiB | fits beside Whisper or the LLM — **default** |
+
+Q8_0 drift against F32 is small (target cosine 0.9996); for a generative model
+the seed-to-seed spread is expected to be larger, so it is the seed spread that
+the UI shows. Long clips use bounded-memory mode
+(`--session-option sam_audio.memory_bounded=true`), which ran 180 s on Large
+where Meta's Python ran out of memory. The 3080 Ti will be several times slower
+than the 5090 — seconds per clip, to be measured.
+
+**Invocation** (the adapter builds these):
+- text: `--task s2s --family sam_audio --text "man speaking" --seed N`
+- anchors: `--request-option 'anchors=[["+",0.5,2.0],["-",3.0,4.0]]'`
+- visual: `--request-option reference_video_path=masked.mp4` (or
+  `reference_image_path`); the audio and video time origins must be aligned —
+  the adapter computes the offset from the container's edit list and start
+  times
+- outputs `target.wav` and `residual.wav`, mono 48 kHz — the residual is §12.2's
+  removed-sound stem for free.
+
+**What the port lacks, and what ATK does instead:**
+- **No automatic span prediction and no candidate ranking (Meta's Judge).** ATK
+  runs several seeds and shows per-segment disagreement; choosing a candidate is
+  the examiner's act, not a model's.
+- **A watermark ATK does not rely on.** Meta's Python adds one; audio.cpp
+  v0.9.0's `src/models/sam_audio/session.cpp` passes a seeded 32-bit message
+  into the decoder, so its output may carry one too; the licence does not
+  require one. ATK applies its own Invented-tier labelling (§12.2) either way.
+
+**Before it is trusted (one time):** a parity run of the GGUF against Meta's
+official Python on a test clip — this needs Meta's gated download accepted once
+— then the GGUF's SHA-256 is pinned in ATK's model manifest and a file with any
+other hash is refused. GGUF is a data format with no executable payload, so the
+risk is wrong weights, not code; the runtime is code, which is why it is built
+from a pinned source release.
+
+**Licence obligations:** ship the SAM License text with the weights;
+acknowledge SAM in ATK's documentation; ship the T5 Apache-2.0 notice. The
+capability row reads **owner exception — SAM License (military, warfare,
+espionage and ITAR end uses banned); replace or remove if ATK goes to
+defense-related work.**
+
+**Isolation, so removal is cheap:** SAM sits behind one adapter
+(`media/sam_audio.py`) implementing a generic *prompted separator* interface.
+ClearerVoice's AV-TSE implements the same interface, so removing SAM removes
+one adapter, one manifest entry and one capability row — nothing else.
+
+**audio.cpp beyond SAM.** The same pinned runtime runs Qwen3-ASR, Parakeet-TDT
+(community-supported), Voxtral realtime, Sortformer diarization, Silero and
+MarbleNet voice-activity detection, and the Qwen3 forced aligner — most of
+§12.6, Python-free. Each model's weights get their own licence check (its music
+separators commonly ship non-commercial community weights; those stay out).
+
+**BUILT 2026-10-05 — and what was verified.** Every flag below was read from
+audio.cpp **v0.9.0**'s own documentation and CLI source on 2026-10-05
+(<https://github.com/0xShug0/audio.cpp/blob/v0.9.0/docs/models/sam_audio.md>,
+<https://github.com/0xShug0/audio.cpp/blob/v0.9.0/docs/usage.md>,
+`app/cli/main.cpp`, `src/framework/audio/wav_writer.cpp`,
+`model_specs/sam_audio.json`); `media/sam_audio.py` builds exactly:
+
+    audiocpp_cli --task s2s --family sam_audio --model <gguf> --backend cuda
+                 --audio input.wav --text "<description>" --seed N
+                 --out-dir <dir> --out-format float32 --log --metrics
+                 [--request-option anchors=[["+",0.5,2.0],["-",3.0,4.0]]]
+                 [--request-option num_inference_steps=N]      (default 16)
+                 [--model-spec-override bin\audiocpp\model_specs\sam_audio.json
+                  --session-option sam_audio.memory_bounded=true]
+
+What the docs said that this plan did not: **`--text` is required even with
+anchors**; memory-bounded mode needs **`--model-spec-override
+model_specs/sam_audio.json`** as well as the session option (the GGUFs predate
+the option; the name is "provisional"), so `get_sam.bat` copies that file beside
+the exe; outputs **may be padded to the next 40 ms codec frame**; the default
+`pcm16` writer **hard-clips** at full scale, so ATK always asks for `float32`
+(tag 3 with a `fact` chunk — the engine's own WAV reader reads it); `--version`
+prints build version, commit and backends and is recorded in every recipe.
+Spans need 0 ≤ start < end and the later span wins an overlap. The weights
+repository (`audio-cpp/SAM-Audio-GGUF`, ungated) holds `LICENSE` (the SAM
+License) and `LICENSE-T5`, which `get_sam.bat` saves beside the weights, and
+publishes each file's SHA-256 (LFS), which `get_sam.bat` compares — that proves
+the download intact, **not** parity. **Watermark:** v0.9.0's SAM session
+passes a seeded 32-bit message into the decoder (and the memory-bounded docs
+carry watermark state between tiles), so its output may be watermarked even
+though the GGUF card says the final port returns audio without one. ATK relies
+on it either way not at all (§12.2). **Paths:** `audiocpp_cli` takes its
+arguments through `wmain` as UTF-8 but opens files through
+`std::filesystem::path` built from a narrow string, which MSVC reads in the
+ANSI code page — so a non-ASCII case or model path is passed as its 8.3 short
+name where the volume keeps one, and otherwise refused with a sentence. The
+`--text` prompt itself is UTF-8 and is not restricted.
+
+Choices made in the build, each written into the module that makes it:
+memory-bounded mode **automatically above 30 s** (twice the publisher's only
+measured length; it costs speed, not correctness); a seed's timeout of 15 min +
+30 s per second of audio (a hang detector, not a budget); three seeds by
+default, 1–5, never `-1` (a random seed cannot be replayed); disagreement per
+250 ms window, flagged at 6 dB or where one seed has sound (≥ −45 dBFS) and
+another is silent (≤ −60 dBFS); replay held to bit-exact for measured steps and
+1 dB per window for generative ones; the model manifest beside the weights
+(`models\sam-audio\model_manifest.json`), the hash cached by size, mtime and
+file id; the negative control flags a window where the target is audible and
+within 20 dB of the noise it was given (energy only).
+
+**Still unproven:** no real `audiocpp_cli` has run — every test drives a fake
+through the same subprocess path; `get_sam.bat` has never run (written by
+reading; the custom `sam_audio`-only model set is the build script's documented
+option but untried); no parity run against Meta's Python, so every result says
+"weights: unverified (parity not run)"; no negative control on Bill's real
+noise; VRAM and seconds-per-clip on the 3080 Ti unmeasured; whether the 30 s
+bounded-mode threshold is too cautious or not cautious enough is unknown; the
+Media Lab has been built under real Qt (offscreen, PySide6 6.11) and played a
+float WAV through QtMultimedia there, but not on Windows; the visual prompt
+(`reference_video_path`) is not wired.
+
+**Hardened 2026-10-05, after an independent review** (no new capability):
+a WAV whose header disagrees with its data (a cut-off recording, a length
+never filled in) goes through FFmpeg as a measured step, because audio.cpp's
+reader throws on it; an invented stem fed back in stays Invented by its
+sidecar, by `.invented` in its name, or — renamed — by its SHA-256 matching an
+output recorded in the case; once any model is pinned, only pinned BYTES run
+(an unpinned BF16 beside a pinned Q8_0 is refused, a renamed pinned file is
+still pinned); a step's tier is floored by its tool (SAM is always Invented)
+and a recipe or sidecar that says otherwise is refused; every path a child
+process is told to write passes the case (or harness) guard before it starts,
+and starting a child is a write site the ratchet checks; an empty or NaN stem
+fails its seed and records no negative-control result; Windows crash codes
+are reported in words with the raw code; `get_sam.bat` compares exit codes
+exactly (NTSTATUS crashes are negative errorlevels), suppresses the loader's
+error dialog when it probes the exe, keeps an existing CUDA build rather than
+replacing it with a fallback (unless `/replace`), and gives up a stalled
+download after two minutes below 1 KB/s and retries it.
+
+### 12.10 Licence table for media recovery
+
+Checked 2026-09-30 against code LICENSE files and model cards (details and
+sources in the research file). "Weights to verify" means the code licence was
+read but the model card could not be.
+
+| component | licence | rule | use |
+|---|---|---|---|
+| audio.cpp | Apache-2.0 | **permitted** | runtime for SAM, ASR, diarization, VAD — separate process |
+| SAM Audio weights (GGUF) | SAM License, 2025-11-19 | **owner exception** (§1.1) | Invented-lane prompted separator |
+| T5 encoder (inside the GGUF) | Apache-2.0 | **permitted** | — |
+| DeepFilterNet 3 | MIT OR Apache-2.0 | **permitted** | radio / phone noise reduction |
+| RNNoise | BSD-3-Clause | **permitted** | noise reduction |
+| GTCRN; sherpa-onnx | MIT; Apache-2.0 | **permitted** | CPU noise reduction |
+| libspecbleach | LGPL-2.1 | **permitted** | spectral noise reduction reference |
+| liquid-dsp | MIT | **permitted** | sync-AM / FM reference |
+| ClearerVoice-Studio (MossFormer2, FRCRN, AV_MossFormer2_TSE) | Apache-2.0, code and weights | **permitted** | separation, enhancement, face-guided extraction |
+| SpeechBrain SepFormer-WHAMR16k | Apache-2.0 | **permitted** | two-talker separation |
+| TIGER | MIT (weights to verify) | **permitted** | light separation |
+| nara_wpe | MIT | **permitted** | dereverberation |
+| Whisper large-v3 | MIT | **permitted** | ASR (existing) |
+| Canary-1b-v2, Parakeet-TDT-0.6B-v3, Sortformer v2, pyannote community-1 | CC-BY-4.0 | **permitted** once CC-BY-4.0 joins the allowlist | ASR cross-check, diarization |
+| Qwen3-ASR | Apache-2.0 (card to verify) | **permitted** | ASR cross-check |
+| SpeechBERTScore, UTMOS | MIT | **permitted** | content and quality checks |
+| rawpy / LibRaw | MIT / LGPL-2.1 OR CDDL-1.0 | **permitted** | RAW decode |
+| libultrahdr | Apache-2.0 | **permitted** | HDR gain maps |
+| OpenCV | Apache-2.0 | **permitted** | CLAHE, fusion, registration |
+| RAFT, SEA-RAFT | BSD-3-Clause | **permitted** | optical flow |
+| Restormer, NAFNet, Retinexformer, HVI-CIDNet, DarkIR, FastDVDnet | MIT | **permitted** | denoise, deblur, low light |
+| SCUNet, SwinIR, HAT, DAT, BasicVSR++, FBCNN, Knusperli, STDF, RFDA | Apache-2.0 | **permitted** | denoise, SR, video, compression |
+| JDEC; drizzle | BSD-3-Clause; BSD | **permitted** | JPEG; multi-frame SR |
+| Handheld MFSR, BSRT, Burstormer | MIT | **permitted** | multi-frame SR |
+| fast-alpr, fast-plate-ocr; PaddleOCR, PARSeq | MIT; Apache-2.0 | **permitted** (detector weight provenance to review) | plates and text |
+| Real-ESRGAN | BSD-3-Clause | **permitted** | Invented lane |
+| SeedVR2 | Apache-2.0, code and weights | **permitted** | Invented lane, video |
+| FlashVSR | Apache-2.0 (weights to verify) | **permitted** | Invented lane, video |
+| GFPGAN, RestoreFormer++ | Apache-2.0 | **permitted** | Invented lane only; never for identification |
+| remoover | ISC | **permitted** | moov rebuild reference |
+| pymp4; h26x-extractor, bitstring, construct | Apache-2.0; MIT | **permitted** | parsing helpers (native preferred) |
+| untrunc (anthwlock) | GPL-2.0 | **arm's length** | reference-file repair, fetched at install |
+| dsd-neo, mbelib-neo | GPL | **arm's length** | soft-decision digital voice (existing DSD path) |
+| WDSP NNR, ka9q-radio, SDR++, krakensdr_doa | GPL | **not used** | design ideas only — never copied |
+| Meta denoiser; LLaSE-G1 pipeline (X-Codec2); NISQA weights | CC-BY-NC; CC-BY-NC; CC-BY-NC-SA | **excluded** | — |
+| AV-HuBERT; Dolphin weights; SoloSpeech | non-commercial research; not cleared; CC-BY-NC | **excluded** | — |
+| CodeFormer, ProPainter, StableSR, ResShift, InvSR, Upscale-A-Video | NTU S-Lab (non-commercial) | **excluded** | — |
+| SUPIR, HYPIR | SupPixel licences | **excluded** | — |
+| VRT, RVRT; Zero-DCE; LLFlow; E2FGVI | CC-BY-NC; CC-BY-NC; CC-BY-NC-SA; CC-BY-NC | **excluded** | — |
+| official `bm3d` / `bm4d` packages | non-commercial | **excluded** | FFmpeg's LGPL-side `bm3d` filter instead |
+
+### 12.11 Where it lives
+
+- **DSP kernels live once, in atkdsp** (C, with its numpy twins): STFT/ISTFT,
+  MMSE log-spectral noise reduction, adaptive notch, click detection and AR
+  interpolation, speech-level normaliser, EKF + smoother FM demodulator,
+  MVDR/LCMV beamformer. Both doors use them; nothing vendors a second copy.
+- **Kraken listening beam**: atkdf supplies calibration and steering, atkdsp the
+  beamformer, ATK's RF panel the menu item.
+- **Orchestration** — recipes, tiers, residuals, the consensus transcript, the
+  adapters to separate processes — is a new subpackage,
+  **`forensics_workshop/media/`**. The engine stays stdlib-only in a bare
+  interpreter: `media` imports numpy lazily (a pyproject extra, `media`, the
+  mobile-crypto pattern), receives atkdsp from ATK by injection (the way
+  `vision.py` receives `ask`), and reports itself unavailable in `capabilities`
+  when either is missing. The file-repair engine of §12.7 is pure stdlib and
+  lives in the engine proper.
+- **Models run out of process.** PyTorch models (ClearerVoice, SepFormer, the
+  image models) run in a media worker — audio models in ATK's existing audio
+  service — and audio.cpp, FFmpeg and untrunc run as subprocesses. A CUDA crash
+  takes down a worker, never ATK.
+- **ATK surfaces.** RF panel: **Recover this transmission** and **Listen along
+  the bearing**. DF workspace: a tenth page, **Media Lab**, after Findings —
+  `dfw_panel.PAGES` and `dfw.PAGE_LABELS` change together and the sync test's
+  count goes from 9 to 10 (**done 2026-10-05**: source, each seed's target and
+  residual with play/stop, the INVENTED badge, weights and negative-control
+  status, a disagreement strip and its spans, open folder, earlier runs). The
+  full Media Lab shows the source and every stem
+  (original, target, residual, each separator's output) with an A/B toggle, a
+  strength slider and the tier badge; the consensus transcript in agreement
+  colours; §11 item 5's integrity-map timeline; and a frame viewer with a region
+  tracker and the invention-map overlay.
+
+### 12.12 The validation harness — built before any model is trusted
+
+- **Negative control first.** Speech-absent noise — Bill's own off-air captures
+  (NBFM with and without carrier, HF static, interference) and phone ambience —
+  through every chain, then through ASR. **A chain that produces words from no
+  speech is labelled "speaks on noise"** and confined to the Invented tier. No
+  published evaluation does this for any named enhancer; ours will. Synthetic
+  noise is built as exponential power in dB, never Gaussian-in-dB — the long
+  tail is what false-triggers detectors, and tidy noise proves nothing (ATK's
+  channel-gate lesson).
+- **SNR curves.** Clean, permissively licensed speech mixed with Bill's real
+  radio noise at +10 … −10 dB, through a real NBFM chain; intelligibility
+  (ESTOI) and word error per ASR, per chain. Result: which chain wins at which
+  SNR, and the SNR below which a chain must not be trusted.
+- **The missing benchmark: a background talker 15–25 dB below the foreground.**
+  Nobody has published one; ATK builds it from two-talker mixes, with the
+  harness scoring both the extracted words and the invented ones.
+- **Visual**: plates and text degraded synthetically with known ground truth;
+  character accuracy per method; seed-variance maps for the generative lane.
+- **SAM parity** (§12.9) and the radio-specific claims (EKF threshold gain,
+  Kraken array gain) measured on Bill's hardware.
+- A model is **trusted for a tier above a measured SNR** only from harness
+  results, recorded per model version and file hash.
+
+### 12.13 Increments (proposed order — Bill's call)
+
+1. **Audio spine.** Recipe, tier and residual format; the classical chain's
+   kernels in atkdsp; DeepFilterNet binary and RNNoise; harness negative
+   control and SNR curves; **Recover this transmission** on `audio_cuts`.
+2. **Consensus transcript.** Whisper plus a second family through audio.cpp,
+   forced-aligner word timing, the at-the-cut flag, `transcript` rows and
+   review-queue proposals.
+3. **Separation and SAM.** ClearerVoice (separation, enhancement, AV-TSE),
+   SepFormer, audio.cpp + SAM GGUF (parity check first), seed disagreement,
+   the Media Lab stems view, the dark-video workflow (anchors, lit-to-dark
+   reference). **SAM part BUILT 2026-10-05** (moved ahead of increments 1–2
+   at Bill's word): audio.cpp v0.9.0 + SAM GGUF behind the prompted-separator
+   interface, recipes and tiers from increment 1, seed disagreement, anchors,
+   the Media Lab stems view, the negative-control hook. Not yet: the parity
+   check (it gates trust, not the build), ClearerVoice, SepFormer, the A/B
+   toggle and strength slider, the visual prompt.
+4. **File repair.** Native `moov`/fMP4 rebuild, NAL scan, audio resync, tail
+   carving, the integrity map (§11 item 5), untrunc arm's length.
+5. **Re-demodulation from I/Q** (needs the DVR I/Q buffer): channel fit, PLL,
+   EKF + smoother, click weighting, sync AM — measured on bladeRF captures.
+6. **Visual faithful lane.** RAW and gain maps, registration, stacking and
+   temporal median, shadow lift, the regressive models, plate voting.
+7. **Listen along the bearing** — after Kraken DF lands.
+8. **Visual generative lane** — SeedVR2 / FlashVSR / Real-ESRGAN with banners
+   and invention maps.
+9. **A radio-trained denoiser** — the NNR recipe, retrained on Bill's off-air
+   VHF/UHF noise.
+
+### 12.14 Not proven, and honest limits
+
+- **No radio gain here is measured on real voice yet.** The EKF's 12 dB is
+  simulated mean-squared error; the Kraken's 7 dB is arithmetic; NNR's figures
+  are its developer's.
+- **SAM Audio**: VRAM and speed figures are the publisher's, on a 5090 with a
+  15-second clip; the GGUF was three days old when chosen; the rate at which it
+  invents words is unmeasured. Built 2026-10-05 but **never run for real**: no
+  parity check, no negative control on real noise, no 3080 Ti figures (§12.9).
+- **Anchors on a video are in seconds of its AUDIO stream.** FFmpeg extracts
+  the first audio track from its own start; when a container starts the audio
+  later than the picture (an edit list, a non-zero audio start time), an
+  anchor read off a video player's clock is off by that offset. Not corrected
+  yet — pick anchors by listening to `input.wav`, not by watching the video.
+- **Paths outside ASCII** reach audio.cpp only through 8.3 short names; on a
+  volume with short names turned off (common on data drives) such a case or
+  model folder is refused until it is moved or renamed.
+- **No open APAC decoder**, and messaging-app handling of multichannel audio is
+  untested beyond WhatsApp in 2020.
+- **Weight licences not yet read from model cards**: TIGER, FlashVSR, Qwen3-ASR,
+  the Stable-Diffusion-derived SR models, fast-plate-ocr's hub models.
+- **Post-vocoder denoising has no demonstrated benefit** and is not planned;
+  encrypted voice is not a goal.
+- **Lip-reading is not planned**: the best open route (AV-HuBERT) is
+  non-commercial and bars surveillance and biometric use; the permitted one
+  (Auto-AVSR) manages about 20% word error even on frontal TED footage.
+- **How many seconds a phone loses** when a recording is interrupted is not
+  quantified anywhere.

@@ -29,3 +29,6 @@ index.db
 *.vhd
 *.vhdx
 *.vmdk
+
+# a session's commit message for the commit-msg hook (tools\commit_message.py in ATK)
+.git-commit-message.txt

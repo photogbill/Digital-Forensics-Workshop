@@ -12,5 +12,13 @@ license = { file = "LICENSE" }
 authors = [{ name = "William R. Duncan" }]
 dependencies = []
 
+[project.optional-dependencies]
+# The finer seed-disagreement measure (FORENSICS_PLAN §12.11). Everything
+# else in forensics_workshop.media runs in a bare interpreter without it.
+media = ["numpy"]
+
 [tool.setuptools.packages.find]
 include = ["forensics_workshop*"]
+
+[tool.setuptools.package-data]
+"forensics_workshop.media" = ["NOTICES.md"]

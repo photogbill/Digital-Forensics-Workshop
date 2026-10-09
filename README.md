@@ -5,7 +5,8 @@ Offline, standard library only, and usable on its own from the command line.
 
 - **Package:** `forensics_workshop` (what ATK probes)
 - **Repository:** `github.com/photogbill/Digital-Forensics-Workshop`
-- **Status:** Phases 1 and 2 of [`FORENSICS_PLAN.md`](FORENSICS_PLAN.md), built 2026-09-11
+- **Status:** Phases 1 and 2 of [`FORENSICS_PLAN.md`](FORENSICS_PLAN.md), built 2026-09-11;
+  Phase 3 begun; media recovery's SAM Audio lane (§12.9) built 2026-10-05, not yet run on Windows
 - **Licence:** all rights reserved; see [`LICENSE`](LICENSE)
 - **Dependencies:** none outside the Python standard library. Anything added
   must pass the licence rule — nothing that restricts commercial use
@@ -69,6 +70,27 @@ built, what is planned and in which phase, which third-party packages are
 present and under what licence, what is deferred or out of scope, and which
 third-party routes the licence rule excludes, with the licence that fails.
 
+## Media recovery — SAM Audio (FORENSICS_PLAN §12.9), built 2026-10-05
+
+`forensics_workshop/media/` — the first piece of §12: Meta's **SAM Audio**, a
+*generative* sound separator ("man speaking", "woman in the background",
+with `+`/`-` time anchors), run by **audio.cpp v0.9.0**'s `audiocpp_cli` as a
+**separate process** (a CUDA fault takes down the child, never the engine).
+**Not yet run on Windows, and not for court** — investigative leads only.
+
+| | |
+|---|---|
+| **Five trust tiers** | measured · recovered · cleaned · inferred · **invented**. An output carries the highest tier of any step behind it; every SAM file is named `…invented.wav`; the tier is in its sidecar and its custody record. A model's watermark is never relied on. |
+| **Recipes** | `<case>/media/<recipe-id>/recipe.json` plus a `<file>.recipe.json` sidecar beside every output: tool, version, model SHA-256, parameters, seed, time range, input and output hashes. `media-replay` re-runs one from the untouched original (measured steps bit-exact; generative stems within 1 dB per 250 ms window). |
+| **Forensic door** | The original is read once through `blocker.open_evidence` into a hashed copy; a video's audio is extracted by an injected FFmpeg as a *measured* step. Outputs only ever go into the case, with `media.started` / `media.derived` / `media.failed` custody. |
+| **Several seeds** | Default 3. The port has no candidate ranker, so the run shows **where the seeds disagree**, per 250 ms window (band-energy spread with numpy, RMS envelope without). Choosing a candidate is the examiner's act. The residual — what was removed — is always kept. |
+| **Weights trust** | `model_manifest.json` beside the GGUF. No pin: allowed, and every result says `weights: unverified (parity not run)`. After the parity check against Meta's Python, `media-pin` records the SHA-256 and any other file is **refused**. |
+| **Negative control** | `media-negative-control`: SAM on speech-absent noise — does the target carry sound? Energy check only (the ASR check comes later); recorded against the model's hash. |
+| **Licence** | SAM's weights are under Meta's SAM License — an **owner exception** to §1.1, shown as such in `capabilities` and bound to that one row and licence. audio.cpp is Apache-2.0. Notices: `forensics_workshop/media/NOTICES.md`. |
+
+numpy is optional (`pip install .[media]`); everything else is the standard
+library. ATK's `get_sam.bat` builds the runtime and downloads the weights.
+
 ## Command line
 
 ```
@@ -106,7 +128,17 @@ python -m forensics_workshop hunt           D:\cases\OP-1 E002 --examiner "Name"
 python -m forensics_workshop findings       D:\cases\OP-1 --examiner "Name" [--status proposed] [--kind pipeline-run]
 python -m forensics_workshop confirm        D:\cases\OP-1 FINDING_ID --examiner "Name" [--note "..."]
 python -m forensics_workshop reject         D:\cases\OP-1 FINDING_ID --examiner "Name" [--note "..."]
+
+python -m forensics_workshop media-sam      D:\cases\OP-1 calls\clip.mp4 --evidence E001 --examiner "Name" --text "woman in the background" --anchor +0.5:2.0 --anchor=-3:4 --seeds 3 --model ATK\models\sam-audio\sam-audio-large-q8_0.gguf --audiocpp ATK\bin\audiocpp\audiocpp_cli.exe --ffmpeg ATK\bin\ffmpeg\ffmpeg.exe
+python -m forensics_workshop media-list     D:\cases\OP-1 --examiner "Name" [--id RECIPE_ID]
+python -m forensics_workshop media-replay   D:\cases\OP-1 RECIPE_ID --examiner "Name" --audiocpp ...
+python -m forensics_workshop media-pin      ATK\models\sam-audio\sam-audio-large-q8_0.gguf --by "Name" --note "parity checked"
+python -m forensics_workshop media-weights  ATK\models\sam-audio\sam-audio-large-q8_0.gguf
+python -m forensics_workshop media-negative-control noise.wav --out ATK\data\media\harness --model ... --audiocpp ...
 ```
+
+An exclude anchor is written `--anchor=-3:4` (or `--exclude 3:4`): without the
+`=`, the leading minus reads as an option.
 
 `--examiner` is required wherever a case is opened, because opening a case is
 itself a custody record.

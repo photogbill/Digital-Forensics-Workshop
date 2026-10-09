@@ -61,3 +61,14 @@ class FileSystemError(ForensicsError):
     raised: it is reported beside the result, because a damaged record is
     itself evidence.
     """
+
+
+class MediaError(ForensicsError):
+    """A media-recovery run (FORENSICS_PLAN.md §12) was refused or failed.
+
+    Raised with a sentence the examiner can act on: which file, which tool,
+    what is missing, and the one command that fixes it where there is one —
+    never a bare traceback. A model's weights whose hash differs from the
+    pinned one are refused with this, too: the wrong weights are not a
+    crash, they are a reason not to run.
+    """

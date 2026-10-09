@@ -21,12 +21,18 @@ What counts as a write, anywhere in the package:
 * every call that creates, renames, copies, truncates, re-times or deletes:
   `os.remove`, `shutil.copy2`, `Path.write_bytes`, `Path.mkdir`, …;
 * `sqlite3.connect`, because opening a database can write to it;
+* starting a child process — `subprocess.Popen`/`run`/`call`/`check_call`/
+  `check_output`, `os.system`, `os.popen`, `os.startfile`, `os.spawn*` —
+  because FFmpeg and audiocpp_cli write files this walk cannot see; a
+  `spawn` writer must put every target through `assert_child_writes` first;
 * registry writes, and the Win32 calls that open or alter files directly
   (`CreateFileW`, `WriteFile`, `SetFileTime`, `DeviceIoControl` …).
 
 Each site must sit inside a function named in `blocker.WRITERS`, and a
-`case` writer must call `assert_case_path` in its own body. A WRITERS entry
-that matches no function is a failure too.
+`case` writer must call `assert_case_path` in its own body — as a `harness`
+writer must call `assert_harness_path` and the `model-manifest` writer
+`assert_manifest_path` (`REQUIRED_GUARDS`). A WRITERS entry that matches no
+function is a failure too.
 
 **AND IT REPORTS WHAT IT LOOKED AT.** A guard that quietly stops inspecting
 anything turns green and stays green — ATK ran a wiring checker for five days
@@ -67,6 +73,16 @@ MUTATORS = frozenset({
     ("winreg", n) for n in (
         "SetValue", "SetValueEx", "CreateKey", "CreateKeyEx", "DeleteKey",
         "DeleteKeyEx", "DeleteValue", "SaveKey", "LoadKey")
+} | {
+    ("subprocess", n) for n in (
+        "Popen", "run", "call", "check_call", "check_output", "getoutput",
+        "getstatusoutput")
+} | {
+    ("os", n) for n in (
+        "system", "popen", "startfile", "spawnl", "spawnle", "spawnlp",
+        "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe", "execv",
+        "execve", "execl", "execle", "execlp", "execlpe", "execvp", "execvpe",
+        "posix_spawn", "posix_spawnp")
 } | {("sqlite3", "connect"), ("mmap", "mmap")})
 
 #: Methods that mutate whatever object they are called on (Path, file).
@@ -85,6 +101,14 @@ WIN32_WRITERS = frozenset({"CreateFileW", "CreateFileA", "WriteFile",
                            "DeleteFileA", "MoveFileExW", "MoveFileW",
                            "SetFileAttributesW", "SetEndOfFile",
                            "SetFileInformationByHandle"})
+
+#: writer kind -> the run-time guard its body must call. A writer of one of
+#: these kinds that never calls its guard can be handed any path at all.
+REQUIRED_GUARDS = {"case": "assert_case_path",
+                   "harness": "assert_harness_path",
+                   "model-manifest": "assert_manifest_path",
+                   "spawn": "assert_child_writes",
+                   "runtime-scratch": "assert_runtime_scratch"}
 
 #: opener -> (index of the mode argument, default mode)
 OPENERS = {
@@ -202,13 +226,14 @@ class _Scanner(ast.NodeVisitor):
 
     def _check_writer_shape(self, qual: str, node) -> None:
         kind = self.writers[qual]
-        if kind == "case":
+        guard = REQUIRED_GUARDS.get(kind)
+        if guard:
             called = {getattr(n.func, "attr", getattr(n.func, "id", ""))
                       for n in ast.walk(node) if isinstance(n, ast.Call)}
-            if "assert_case_path" not in called:
+            if guard not in called:
                 self.report.violations.append(
-                    f"{qual} (line {node.lineno}) is a CASE writer that "
-                    "never calls assert_case_path — nothing stops it being "
+                    f"{qual} (line {node.lineno}) is a {kind.upper()} writer "
+                    f"that never calls {guard} — nothing stops it being "
                     "handed an evidence path")
         elif kind == "probe":
             kwonly = {a.arg: d for a, d in zip(node.args.kwonlyargs,

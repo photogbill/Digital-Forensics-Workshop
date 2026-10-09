@@ -76,6 +76,21 @@ NOATIME_FLAG = getattr(os, "O_NOATIME", 0)
 #:   probe       the one deliberate write to a TEST device, refused unless
 #:               the caller passes confirm_not_evidence=True
 #:   host-policy the USB WriteProtect registry value
+#:   harness     a validation run's own folder (FORENSICS_PLAN §12.12), which
+#:               the caller names and which is never inside a case — asserted
+#:               with `assert_harness_path`, and the ratchet checks the call
+#:   model-manifest  the pinned-hash manifest beside a model's weights
+#:               (media/weights.py) — exactly that one file, never in a case;
+#:               asserted with `media.weights.assert_manifest_path`
+#:   spawn       starts a CHILD PROCESS (FFmpeg, audiocpp_cli), whose own
+#:               writes no syntax tree can see — so every path the child is
+#:               told to write is put through a case or harness guard first,
+#:               with `assert_child_writes`, and the ratchet checks the call
+#:   runtime-scratch  the `tmp\` folder beside audiocpp_cli that the child
+#:               gets as TMP/TEMP (audio.cpp unpacks GGUF config sidecars
+#:               there) — so nothing lands in %TEMP% in the Windows profile;
+#:               exactly that folder, never in a case, asserted with
+#:               `media.sam_audio.assert_runtime_scratch`
 #:
 #: A stale entry fails the ratchet too: a list that names functions which
 #: no longer exist stops describing the code, and nobody notices.
@@ -94,6 +109,20 @@ WRITERS = {
     "artefacts.mobile:_open_working_copy": "case",
     "artefacts.mobile:_write_file_map": "case",
     "review:_append": "case",
+    # media recovery (FORENSICS_PLAN §12): run outputs go into the case; the
+    # negative control into a harness folder; pins beside the weights. The
+    # separator and FFmpeg write their own files as CHILD PROCESSES, into
+    # folders these functions made inside the case — see media/lab.py.
+    "media.lab:_case_log": "case",
+    "media.lab:_case_settle": "case",
+    "media.lab:_harness_dirs": "harness",
+    "media.lab:_harness_log": "harness",
+    "media.lab:_harness_settle": "harness",
+    "media.lab:_harness_json": "harness",
+    "media.weights:_write_manifest": "model-manifest",
+    "media.sam_audio:run_process": "spawn",
+    "media.sam_audio:probe_version": "spawn",
+    "media.sam_audio:make_scratch": "runtime-scratch",
 }
 
 
@@ -170,6 +199,39 @@ def assert_case_path(case_root, target) -> Path:
             f"{case_root}. Everything this engine writes during a case "
             "goes inside the case.")
     return Path(target)
+
+
+def assert_harness_path(harness_root, target) -> Path:
+    """The run-time guard for a validation run (FORENSICS_PLAN §12.12): the
+    target is inside the harness folder the caller named, and that folder is
+    not inside a case — a negative control is a test of a model, not case
+    work, and must not land among an examiner's derived items unrecorded."""
+    if not is_inside(target, harness_root):
+        raise CasePathError(
+            f"Refusing to write {target}: it is outside the harness folder "
+            f"{harness_root}.")
+    root = Path(os.path.abspath(os.fspath(harness_root)))
+    for folder in (root, *root.parents):
+        if (folder / "case.json").is_file():
+            raise CaseLayoutError(
+                f"Refusing: the harness folder {harness_root} is inside the "
+                f"case at {folder}. Validation runs go outside every case "
+                "(ATK: data\\media\\harness).")
+    return Path(target)
+
+
+def assert_child_writes(guard, targets) -> list:
+    """The run-time guard for a CHILD PROCESS: every path it will be told to
+    write goes through `guard` (`assert_case_path` or `assert_harness_path`
+    bound to its root) BEFORE it starts. A child that writes nothing of ours
+    (`--version`) passes no targets, and says so by passing none."""
+    paths = list(targets or ())
+    if paths and guard is None:
+        raise CasePathError(
+            "A child process that writes files was started with no guard for "
+            "where they go. Everything it writes must be inside the case (or "
+            "a harness folder).")
+    return [Path(guard(p)) for p in paths]
 
 
 def refuse_evidence_path(target, evidence_roots: Iterable) -> None:
