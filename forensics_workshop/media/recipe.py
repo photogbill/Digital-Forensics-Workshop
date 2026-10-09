@@ -70,6 +70,24 @@ TOOL_TIERS = {
     "forensics_workshop read-only door (hashed copy)": "measured",
     "ffmpeg": "measured",
     "audiocpp_cli sam_audio": "invented",
+    # a time shift by a measured lag (restore_worker.py's finish): nothing
+    # added, nothing removed but the delay a filter put in
+    "forensics_workshop restore_worker alignment": "measured",
+    # SpeechBrain's discriminative models (FORENSICS_PLAN §13.4): never below
+    # Inferred — a learned model chose what to keep.
+    "speechbrain metricgan-plus-voicebank": "inferred",
+    "speechbrain sepformer-dns4-16k-enhancement": "inferred",
+    "speechbrain sepformer-whamr16k": "inferred",
+    # faint sounds (FORENSICS_PLAN §13.8), restore_worker.py. Combining
+    # channels and averaging waveform repeats add REAL observations
+    # together; the salience map only measures; masking to what stands out,
+    # and lifting a repeating background off, remove.
+    "forensics_workshop restore_worker channel combining": "recovered",
+    "forensics_workshop restore_worker repeat averaging": "recovered",
+    "forensics_workshop restore_worker salience map": "measured",
+    "forensics_workshop restore_worker salience mask": "cleaned",
+    "forensics_workshop restore_worker repeating-pattern separation":
+        "cleaned",
 }
 #: A generative separator, whatever its name gets spelled as.
 _ALWAYS_INVENTED = ("sam_audio", "sam audio")

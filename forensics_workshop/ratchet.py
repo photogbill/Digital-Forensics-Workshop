@@ -108,7 +108,8 @@ REQUIRED_GUARDS = {"case": "assert_case_path",
                    "harness": "assert_harness_path",
                    "model-manifest": "assert_manifest_path",
                    "spawn": "assert_child_writes",
-                   "runtime-scratch": "assert_runtime_scratch"}
+                   "runtime-scratch": "assert_runtime_scratch",
+                   "calibration": "assert_calibration_path"}
 
 #: opener -> (index of the mode argument, default mode)
 OPENERS = {

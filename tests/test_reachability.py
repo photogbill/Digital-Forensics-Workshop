@@ -42,6 +42,12 @@ BY_DESIGN = {
     "media.lab:capability_note":
         "called by capabilities() through getattr on the imported module — "
         "a hook a name walk cannot follow; the capabilities verb reaches it",
+    "media.restore:capability_note":
+        "called by capabilities() through getattr on the imported module — "
+        "a hook a name walk cannot follow; the capabilities verb reaches it",
+    "media.voiceprint:capability_note":
+        "called by capabilities() through getattr on the imported module — "
+        "a hook a name walk cannot follow; the capabilities verb reaches it",
 }
 
 

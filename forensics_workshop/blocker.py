@@ -90,7 +90,17 @@ NOATIME_FLAG = getattr(os, "O_NOATIME", 0)
 #:               gets as TMP/TEMP (audio.cpp unpacks GGUF config sidecars
 #:               there) — so nothing lands in %TEMP% in the Windows profile;
 #:               exactly that folder, never in a case, asserted with
-#:               `media.sam_audio.assert_runtime_scratch`
+#:               `media.sam_audio.assert_runtime_scratch` (and the voice
+#:               worker's temp and caches, `media.voiceprint`'s own guard of
+#:               the same name: exactly the folder the host named)
+#:   calibration the voice model's `voiceprint_calibration.json`, in the
+#:               model's own folder and never in a case — asserted with
+#:               `media.voiceprint.assert_calibration_path`
+#:   worker-output  what a worker process writes (`media/vp_worker.py`,
+#:               `media/restore_worker.py` — run as their own processes,
+#:               never imported): every path is put through the case or
+#:               harness guard by the parent's `assert_child_writes` before
+#:               the worker starts — the worker itself cannot import it
 #:
 #: A stale entry fails the ratchet too: a list that names functions which
 #: no longer exist stops describing the code, and nobody notices.
@@ -123,6 +133,10 @@ WRITERS = {
     "media.sam_audio:run_process": "spawn",
     "media.sam_audio:probe_version": "spawn",
     "media.sam_audio:make_scratch": "runtime-scratch",
+    "media.voiceprint:make_scratch": "runtime-scratch",
+    "media.voiceprint:_write_calibration": "calibration",
+    "media.vp_worker:_write": "worker-output",
+    "media.restore_worker:_write_bytes": "worker-output",
 }
 
 

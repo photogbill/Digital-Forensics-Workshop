@@ -366,8 +366,31 @@ _TABLE = (
      "third-party", "forensics_workshop.media.sam_audio", "", "Apache-2.0",
      "planned",
      "github.com/0xShug0/audio.cpp, built from the pinned source release by "
-     "ATK's get_sam.bat (CUDA, falling back to Vulkan or CPU). Nothing linked; "
-     "notices in forensics_workshop/media/NOTICES.md."),
+     "ATK's get_sam.bat (CUDA, else Vulkan; a CPU-only build only when asked "
+     "for, and refused at run time unless allowed). Nothing linked; notices "
+     "in forensics_workshop/media/NOTICES.md."),
+    ("restoration", "Audio restoration — analyse, recommend, run, compare, "
+     "export (§13.3–13.4)", 3, "third-party",
+     "forensics_workshop.media.restore", "", "Apache-2.0", "planned",
+     "Measured analysis (noise, hum, rumble, DC, clipping, clicks, "
+     "bandwidth, level) by media/restore_worker.py in its own process; "
+     "ranked options built from FFmpeg filters (arm's length) and "
+     "SpeechBrain's MetricGAN+, SepFormer-DNS4 and SepFormer-WHAMR! "
+     "(Apache-2.0); every output with its residual, tier and recipe; run the "
+     "best, chosen or all; export into the case. Faint sounds (§13.8): "
+     "channels that hold one sound combined (maximal-ratio, Recovered); a salience "
+     "map of what stands out of the recording's own noise over windows to "
+     "16 s, a clip of each faint event; tonal lines; repeats averaged "
+     "(Recovered) or a repeating background lifted off (Cleaned). Not yet "
+     "run against the real models."),
+    ("voiceprint", "Voice comparison — speaker embeddings, a probability only "
+     "through a calibration (§13)", 3, "third-party",
+     "forensics_workshop.media.voiceprint", "", "Apache-2.0", "planned",
+     "SpeechBrain's ECAPA-TDNN (speechbrain/spkrec-ecapa-voxceleb, "
+     "Apache-2.0 code and weights) run by media/vp_worker.py in its own "
+     "process under the host's torch interpreter (ATK: get_speechbrain.bat). "
+     "Case-scoped profiles; every comparison a review-queue LEAD; INVENTED "
+     "audio refused. Not yet run against the real model."),
 
     # Routes that FAIL the licence rule: whole-program copyleft that would
     # require publishing this engine's own source. Never built or imported.

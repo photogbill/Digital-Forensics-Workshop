@@ -85,6 +85,36 @@ WAVs through FFmpeg, invented inputs tracked by name and hash, pins matched by
 hash, tool-floored tiers, child-process writes guarded, broken stems refused,
 crash codes in words). Details and the unproven list: §12.9 and §12.14.
 
+**Media — 2026-10-09: SAM must run on the GPU.** The first Windows test ran SAM
+on a CPU build that `get_sam.bat` had fallen back to after its CUDA build
+failed — hours of work with no GPU and nothing on screen. Now: a CPU build is
+refused (engine and ATK; `--allow-cpu` to override), `get_sam.bat` makes none
+unless asked (`/cpu`), keeps every build's full output in
+`logs\get_sam-build.log`, pins the CUDA build to Visual Studio 2022; the
+child's TEMP is beside the runtime, never the Windows profile; a heartbeat
+names the backend and audio.cpp's last line every 10 s; every log ends saying
+how the child ended; every run is logged in ATK's `atk.log`.
+
+**Built 2026-10-09 — Restore Audio and Voice Print (§13).** Bill's three asks:
+automated analysis of what will restore a recording, chains of methods when the
+analysis says they help, and voice prints *"with a percentage probability"* — as
+a lead, not courtroom evidence. **Restore Audio** measures a recording (noise,
+hum, rumble, DC, clipping, clicks, bandwidth, level), ranks restoration chains
+least-invasive first (FFmpeg filters; SpeechBrain MetricGAN+ and SepFormer;
+two-voice separation offered, never the default), runs the best, the ticked or
+all of them, aligns every output to the original, keeps its residual and
+measures what each took and added — and looks for **faint sounds** (§13.8):
+channels that carry one sound combined (maximal-ratio, Recovered), a salience map of what
+stands out of the recording's own noise over windows up to 16 s with a clip of
+each faint event, tonal lines, and repeats averaged (10·log10 N dB) or lifted
+off. **Voice Print**: SpeechBrain's ECAPA speaker
+model (Apache-2.0) in its own process, case-scoped profiles, a percentage only
+when calibrated, Invented audio refused, every comparison a review-queue lead.
+`get_speechbrain.bat` installs it all. Tested here through fakes over the real
+subprocess path, the models through SpeechBrain 1.1.1 on stand-in weights, and
+the two ATK pages under real Qt; **not yet run on Windows or on the real
+weights** (§13.7).
+
 `python -m forensics_workshop capabilities` lists what is built, what is not,
 and which routes the licence rule excludes.
 
@@ -1558,3 +1588,364 @@ read but the model card could not be.
   (Auto-AVSR) manages about 20% word error even on frontal TED footage.
 - **How many seconds a phone loses** when a recording is interrupted is not
   quantified anywhere.
+
+---
+
+## 13. Audio triage, chained restoration and voice comparison (Bill, 2026-10-09)
+
+Bill's three asks, in his words:
+
+1. *"Audio File Automated Analysis — to determine the best method(s) for audio
+   restoration, and list what each method might get you."*
+2. *"Audio Restoration / Forensics — Using a multitude of different models and
+   techniques, sometimes sequentially, so daisy chain tools if the analysis
+   indicates it will benefit in the result."*
+3. *"Voice Print Analysis — Create a voice print for identifying an individual
+   based off their voice, with a percentage probability."*
+
+And on the number: *"A probability score is fine, it can be used more as a lead
+rather than courtroom evidence."* That is §12's stance again — leads that can
+save a life, not evidential analysis — and it sets the one hard rule for this
+section: **a voice score is a lead into the review queue, never an
+identification, and the percentage is only ever shown when it has been
+calibrated.**
+
+### 13.0 Decisions (Bill, 2026-10-09)
+
+- **Voice comparison is built first**, then triage (§13.3), then chains
+  (§13.4). Bill: *"Having a voice print analysis capability built into ATK
+  would be wonderful."*
+- **SpeechBrain** (Apache-2.0, 1.1.1 released 2026-08-27, actively maintained)
+  supplies the speaker model. ATK's installer fetches it; ATK does not ship it.
+- **Downloaded, not distributed — and what that does and does not change.**
+  Bill's point: a model the user downloads from inside ATK is not distributed
+  with ATK. Right for *distribution* duties (share-alike, copyleft, bundled
+  notices) — the FFmpeg-at-install reasoning of §1.1. Not right for *use*
+  restrictions (non-commercial, research-only, SAM's field-of-use ban): those
+  travel with the model to whoever runs it, so a download button moves them onto
+  the user without removing them. So **every downloadable model carries a
+  licence badge** — green permissive, amber attribution / share-alike, red
+  non-commercial or field-of-use — shown before the download and on every
+  result it produces; ATK's defaults stay inside §1.1. The voice model is green.
+  (Not legal advice.)
+- **The percentage is a calibrated probability or it is not shown** (§13.1).
+
+### 13.1 Voice comparison — the model, and what the number means
+
+- **Model:** ECAPA-TDNN, `speechbrain/spkrec-ecapa-voxceleb`, trained on
+  VoxCeleb 1 and 2; Apache-2.0 on its model card (read 2026-10-09); a
+  192-number embedding from 16 kHz mono speech. Published EER 0.80% on the
+  cleaned VoxCeleb1 test — celebrity interviews from YouTube, not phones or
+  radios; the card disclaims performance on other data.
+- **The raw score is a cosine similarity of two embeddings. It is not a
+  probability.** The same person rarely scores near 1.0, and where the
+  same/different boundary falls moves with the channel (phone, radio, room).
+  Printing 0.62 as "62%" would understate a strong match on one channel and
+  overstate a weak one on another.
+- **Calibration turns the score into a probability.** A logistic map, fitted on
+  same-speaker and different-speaker pairs from a **reference set**, with the
+  two classes weighted equally, gives P(same speaker | score) at even prior
+  odds. The examiner can move the prior (default 50%); the screen always shows
+  which calibration and which prior made the number. **Uncalibrated, the page
+  shows the raw score, marked UNCALIBRATED, and no percentage.**
+- **Reference sets** are folders with one subfolder per speaker (any audio or
+  video inside, nested folders allowed). `get_speechbrain.bat` fetches
+  **LibriSpeech test-clean** (CC BY 4.0: 40 speakers, clean read
+  speech) as the starting set; Bill's own phone and radio recordings make the
+  calibrations that match his cases. A calibration made on clean read speech
+  and used on a phone call is approximate, and the page says so.
+- **Quality flags beside every score:** net speech in seconds (energy-gated;
+  amber under 10 s, red under 3 s) for the questioned recording and for each
+  profile; the input's tier; the calibration's conditions; how many segments
+  were scored.
+- **Tiers (§12.2) gate the input.** Invented audio is **refused** — a
+  generative separator can reshape a voice, so a SAM stem is never compared.
+  Cleaned or Inferred audio is allowed and flagged. A renamed stem is caught by
+  its sidecar or its hash (`lab.upstream_of_input`).
+- **Profiles live in the case** (§0.2), built from known samples the examiner
+  enrols. ATK keeps no standing library of voices.
+- **What it does not catch:** a cloned or synthetic voice can score as the
+  person it imitates — ATK's own Chatterbox clones voices — so a high score on
+  audio of unknown origin is a lead to a *voice*, not to a person. Disguise,
+  mimicry, close relatives, a cold or shouting all move the score.
+
+### 13.2 How it runs
+
+- **Engine, stdlib:** `forensics_workshop/media/voiceprint.py` — the energy
+  gate and segmenting (speech-bearing windows into segments of about 3 s),
+  profiles, comparison, the calibration fit (two-parameter weighted logistic
+  regression by Newton's method), custody, review-queue leads, CLI verbs
+  `voice-enrol`, `voice-profiles`, `voice-compare`, `voice-calibrate`.
+- **Worker, its own short-lived process:** `forensics_workshop/media/
+  vp_worker.py`, self-contained, run as `envs\atk_audio\Scripts\python.exe -I
+  vp_worker.py REQUEST RESPONSE`. It imports torch and SpeechBrain and loads the
+  model **from its local folder** (source = savedir, `LocalStrategy.NO_LINK`,
+  `pretrained_path` overridden, `HF_HUB_OFFLINE=1`) — no network and no
+  symlinks, which Windows refuses without developer mode. **Not inside the audio
+  service**: faster-whisper and torch bring different cuDNN builds, and the
+  second to load dies natively (2026-08-28, the F5-TTS crash) — a separate
+  process cannot collide. GPU when torch sees one; on the CPU ECAPA takes
+  seconds, not hours, so the CPU is an allowed fallback here (unlike SAM) and
+  the result names the device it ran on.
+- **Nothing on C:.** TMP/TEMP, `HF_HOME`, `TORCH_HOME` and `CUDA_CACHE_PATH`
+  for the worker point at a scratch folder the host names (ATK:
+  `data\tmp\speechbrain`); the model lives in
+  `models\speechbrain\spkrec-ecapa-voxceleb\`.
+- **Input:** read once through the read-only door into the case, then FFmpeg
+  to 16 kHz mono PCM — a measured step in the record.
+- **Case layout:** `<case>/voiceprint/profiles/<id>/profile.json` (+ each
+  sample's copy and 16 kHz WAV) and `<case>/voiceprint/runs/<id>/` (the
+  questioned copy, its WAV, the worker's request, response and log, and
+  `result.json`). Custody: `voiceprint.enrolled`, `voiceprint.compared`,
+  `voiceprint.failed`.
+- **Review queue:** each comparison files one `voice-comparison` proposal
+  (source `model:spkrec-ecapa-voxceleb`) listing every profile's score; the
+  examiner confirms or rejects (§10's frame).
+- **Calibrations** live beside the model, `voiceprint_calibration.json` in its
+  folder — a statement about that model's scores, travelling with it — never in
+  a case. Several can coexist (clean speech, phone, radio); the page picks one.
+- **ATK:** the twelfth DF page, **Voice Print**, after Restore Audio — profiles,
+  enrol, compare, a colour-banded bar per profile (calibrated % or raw score), a
+  timeline strip showing which profile each stretch of the recording matches
+  best, the quality flags, the calibration picker and the prior. Runs inside the
+  AI queue and logs to `atk.log` (component `dfw.media`).
+  `get_speechbrain.bat` installs SpeechBrain into `envs\atk_audio` (torch,
+  torchaudio and numpy held at their installed versions by a pip constraints
+  file), fetches the four models into `models\speechbrain\`, self-tests the
+  voice model offline, and fetches LibriSpeech test-clean and fits the first
+  calibration (`/nocalibration` skips that). `install.bat` runs it by default
+  (`/nospeechbrain` skips it) and its stage report says what landed.
+
+### 13.3 Restore Audio — measure first, then recommend (built 2026-10-09)
+
+Bill: *"it will do analysis first, determine what is needed, select the optimal
+restoration option, and then run that and export the result. If its multiple
+options, either run the best one or have an option to run both or all, to see
+which comes out best. (user will listen to them all i mean)"*
+
+**Analysis is measurement, not a model** (`media/restore_worker.py`, its own
+process, torch only): 25 ms frames split into speech and pauses by an energy
+gate; the SNR between them and the noise floor's steadiness; mains hum
+(50/60 Hz and harmonics, measured **in the pauses** — a voice at 120 or 180 Hz
+puts its own harmonics on mains multiples, which the first test caught);
+rumble; DC; clipping (flat runs at full scale); clicks; the bandwidth the speech
+occupies; level. `restore.issues()` turns each number into a finding with a
+severity, quoting the measurement. A recording with nothing above the gate has
+**no speech** — every frame is a pause (2026-10-09: steady noise had been
+counted as all speech).
+
+| finding | what it offers | tier |
+|---|---|---|
+| hum, rumble, DC, clicks, clipping, narrow band | notches, high-pass, de-click, de-clip, low-pass — shared by every option | Measured / Cleaned (de-clip Inferred) |
+| steady or changing noise | FFmpeg `afftdn`; SpeechBrain MetricGAN+; SepFormer DNS4 | Cleaned; Inferred |
+| two talkers | SepFormer WHAMR! — **always offered, never the default** | Inferred |
+| quiet speech | gain, peaks kept under −1 dBFS | Measured |
+| faint sounds, tones, repeats, channels | §13.8 | Measured → Cleaned |
+
+**Ranking**: each option's effect on what was found (severity-weighted) less a
+penalty for its tier (Cleaned 0.3, Inferred 0.8, Invented 2.0): the least
+invasive chain that deals with everything serious wins. The faint-sound options
+rank after the main content's unless the faint sounds are all there is.
+
+**Running**: the recommended option, the ticked ones, or all. Each option is
+its own folder in `<case>/restoration/<run>/`; every output is **aligned** to
+the working copy (cross-correlation; FFmpeg's `afftdn` delays by about 25 ms —
+1102 samples at 44.1 kHz, measured 2026-10-09 — and IIR notches shift phase),
+its **residual** written to listen to, a recipe sidecar beside every file, and
+what changed measured from **magnitude** spectra: energy taken from the pauses,
+taken during speech, and **added** (a model making sound). `measured_best()`
+ranks the speech restorations on that — a pointer for the ear, never a verdict.
+Export copies a chosen output (and its sidecar) to `<case>/exports/restoration/`
+with custody.
+
+### 13.4 Chains — as built
+
+- **Order:** shared measured/cleaned fixes first, then one model step (16 kHz)
+  or one faint-sound step, then level — kept **out of the residual**, so the
+  residual says what the chain took, not what the gain changed.
+- **A step's tier is held to its tool's floor** (`recipe.TOOL_TIERS`):
+  SpeechBrain models never below Inferred, channel combining and repeat
+  averaging Recovered, masks and repeating-background removal Cleaned, the
+  salience map Measured. An Invented input keeps every output Invented, and its
+  file name says so.
+- **"A step stays only if it measurably helps"** is not automated: UTMOS was
+  not adopted. Instead every option runs to the end and is **measured against
+  the others** (removed from the pauses, removed during speech, added), and the
+  examiner listens. A failing option is recorded and the others still run.
+- **A restored output can be voice-compared only below Invented** (§13.1).
+
+### 13.5 Licence table for §13
+
+| component | licence | rule | use |
+|---|---|---|---|
+| SpeechBrain 1.1.1 | Apache-2.0 | **permitted** | the workers' model code |
+| `spkrec-ecapa-voxceleb` | Apache-2.0 (model card, 2026-10-09) | **permitted** | voice comparison |
+| `metricgan-plus-voicebank` | Apache-2.0 | **permitted** | enhancement |
+| `sepformer-dns4-16k-enhancement` | Apache-2.0 | **permitted** | enhancement |
+| `sepformer-whamr16k` | Apache-2.0 | **permitted** | two-voice separation |
+| LibriSpeech test-clean | CC-BY-4.0 | **permitted** (attribution; does not restrict commercial use) | the first calibration, fetched by `get_speechbrain.bat` |
+| FFmpeg filters | ATK's review (§1.1) | arm's length, a separate process | every filter step |
+| VoxCeleb, VoiceBank, DNS-4, WHAMR! | — | not used | the weights' training data only |
+
+`media/NOTICES.md` carries the notices and the citations SpeechBrain asks for.
+
+### 13.6 Increments
+
+1. **Voice comparison** — built 2026-10-09 (engine, worker, CLI, Voice Print
+   page, `get_speechbrain.bat`, calibration).
+2. **Restore Audio: triage, options, chains, compare, export** — built
+   2026-10-09.
+3. **Faint sounds** (§13.8) — built 2026-10-09.
+4. **Diarization and better speech detection** — SpeechBrain's VAD in place of
+   the energy gate; each voice in a recording scored on its own.
+5. **Calibrations that match Bill's cases** — phone and radio reference sets
+   from his own recordings; the faint-sound thresholds checked on his own
+   noise (wind, traffic, off-air).
+6. **Faint sounds, next:** a repeat the examiner marks (a template, matched
+   wherever it occurs, not only at a steady period); sub-sample alignment for
+   the combination; a voice-shaped (harmonic) detector beside the salience map.
+
+### 13.7 Not proven, and honest limits
+
+- **Neither worker has met the real weights in this build** — the build
+  machine could not reach Hugging Face. Both follow SpeechBrain 1.1.1's loading
+  code (read at the source) and ran on stand-in weights built from the real
+  hyperparameters; the engine is tested through fake workers over the real
+  subprocess path; the ATK pages build and run under real Qt (Linux, offscreen).
+  **The first run on Windows and on the real weights is Bill's install.**
+- **The energy gate counts loud non-speech as speech**, so net-speech seconds
+  overstate on noisy recordings until increment 4's VAD.
+- **The percentage depends on the calibration set and the prior.** Clean read
+  speech says little about radio; calibrate with recordings like the case.
+- **Short questioned clips** (under about 10 s of speech) are unreliable on any
+  system; the flag says so but cannot fix it.
+- **SepFormer and MetricGAN+ were trained on microphone noise**, not radio:
+  their outputs on off-air audio are leads to listen to, nothing more.
+- **"Measured best" is a pointer**, from energy removed and added — it cannot
+  hear a smeared consonant.
+
+### 13.8 Faint sounds — what more data and long listening can recover (built 2026-10-09)
+
+Bill, 2026-10-09: *"i also want the ability to pull extremely faint noises from
+audio, stuff that would previously have been unrecoverable. So if you see a
+route to that, lets consider it."* — then *"I love your proposal, go for it"*
+and *"and build it"*.
+
+**The honest frame first.** A sound heard once, in one channel, under steady
+noise, is recoverable only as far as the information in that one recording
+goes; no filter and no model adds information that was not recorded (a
+generative one invents it — §12.2). What CAN go further is **more data**: more
+channels of the same moment, more repeats of the same sound, more seconds of a
+sound that persists. Three routes use exactly that, and a fourth shows the
+examiner where to listen. All four run in every analysis (`restore.analyse`,
+`faint=False` or `--no-faint` to skip) inside the same worker process.
+
+**1. Channels — combined when they carry one sound (Recovered).** Every channel
+is kept (`channels.wav`); the worker measures each one's share of sound above
+its own noise (rho), finds each channel's lag to the best one (±0.5 s, either
+polarity) and its correlation there over the loud frames. One sound with
+independent noise gives a correlation near sqrt(rho_1·rho_2); far below that,
+each channel carries its own sound (the two sides of a call) and nothing is
+combined; channels that are mostly noise prove nothing either way, so the
+combination is tried and kept only if it measures better. The combination is
+**maximal-ratio and distortionless toward the best channel, per frequency** —
+each channel's noise power from the quietest 30% of frames, the transfer of
+the shared sound from the covariance of all frames less that noise — so the
+shared sound passes at exactly its level and phase and only noise the channels
+do not share is averaged down. Where a band holds under a tenth signal its
+transfer cannot be measured and each channel's broadband gain stands in. It is
+worked a minute at a time (two passes of statistics, then the weights), so an
+hour of several channels fits in memory. **It becomes the working copy** (every
+option starts from it), and "Channels combined — nothing else" lets the
+examiner hear it against the best channel (its residual).
+Measured on synthetic two- and four-channel recordings (16 kHz, white noise,
+voice-like signal at −5 to −15 dB): close to the theoretical gain — two
+channels +1.3 dB (bound +1.7), an inverted pair +2.9 (bound +3.0; a plain
+downmix of it **cancels**: −51 dB), four channels +5.0 (bound +5.35), two equal
+channels at −15 dB +2.3. **MVDR was built first and taken out the same day**:
+it also cancels noise the channels share (+3.25 dB with 70% shared noise), but
+a steady sound present in the quiet frames — an engine, a tone — then counts as
+noise and the weights cancel it: a tone lost 15 dB. Maximal-ratio cannot do
+that.
+
+**2. The salience map — where something stands out of this recording's own
+noise (Measured).** 32 ms frames; each bin's noise is its median power over the
+recording; each cell's ratio to it is averaged over windows from 0.25 s to 16 s
+and from one bin to 27 bins wide, and scored in the log domain against that
+bin's own median and spread (neighbouring bins steady each other's). **Long
+integration** is the point: N noise-only frames averaged vary by about
+1/sqrt(N), so a sound that persists is seen far below where any single moment of
+it is. Below 30 Hz is taken out first and below 60 Hz not scored (sub-bass
+leaks through every window's sidelobes); a window is used only where the
+recording holds 30 of it; the edges are not scored. Thresholds were set on
+synthetic white, pink and slowly-modulated noise, where the highest score over
+ten minutes at 16 kHz was 5.8: **6.0 = possible, 7.5 = certain**, both raised
+by 0.6 for every tenfold more time-frequency cells (twenty minutes at 48 kHz:
++0.6), since more cells give noise more chances. Each event is reported
+with its time, its band, its level against the noise in its band and against
+all the noise (**"18 dB under the noise"**), and is boxed on the map; the eight
+strongest faint ones get a **clip** — the stretch around it, kept to a
+listening band (the event's, opened to an octave below and two above, since the
+detector's band is often one harmonic of a voice), the cells that stand out at
+full level and the rest of the band 12 dB down, brought to −3 dBFS (Cleaned,
+with a sidecar). A voice-like sound at −20 dB over its stretch came out of its
+clip at −10 dB. When a repeat is found the events come from what is left with
+the repeat taken out.
+The map (`salience.png`, mel-spaced rows) is drawn by the worker and shown on
+the Restore Audio page with its axes. Measured on synthetic events in white
+noise at 16 kHz: a 1.5 s tone found at −20 dB broadband (not at −25); a 1 s,
+1 kHz-wide noise at −10 dB; a 2 s voice-like sound at −15 dB; a 20 s band of
+noise at −20 dB (certain) and −25 dB (possible). **For a one-off sound this is
+about what a careful listener could pick out in a quiet room — but across hours
+and every band at once; the map says where to listen, it does not make an
+inaudible one-off sound audible.**
+
+**3. Tonal lines (Measured).** The long-term spectrum at about 1 Hz
+resolution; a line is a local peak at least 3 dB over the median ±15 Hz around
+it with its significance from the number of averaged segments. Harmonic series
+are grouped and the mains family named. A 60 s tone was found at −35 dB
+broadband (not at −40). Shown as violet dots across the map.
+
+**4. Repeats — averaged, or lifted off (Recovered / Cleaned).** The beat
+spectrum (each frequency row's autocorrelation, rows weighted by how strongly
+each repeats at all) finds a steady period of 0.1 s or more seen at least three
+times; then the WAVEFORM is cut at that period, every repeat aligned (twice:
+the second time to the average of all), and, for a steady source, the positions
+fitted to a straight line. If the repeats match as waveforms (significance from
+their length and number), **averaging N of them lowers independent noise by
+10·log10(N) dB**: "Average the repeats" lays the average back where each one
+was (Recovered) and its residual is **everything that does not repeat**. If only
+the spectra repeat, "Lift off the repeating background" (REPET, Rafii and
+Pardo) keeps what stands above the median of the repeating spectrogram
+(Cleaned). Measured: 30 chirps at −15 dB → −2.1 dB (+12.9 dB), at −20 → −9.2
+(+10.8), at −5 and −10 exactly +14.8 = 10·log10 30; a voice under a
+sample-exact machine loop rose from −20 to −3 dB in the residual; under REPET a
+voice rose about 5–6 dB. No repeat was found in any noise-only test. When a
+repeat is found, the salience events are taken from the recording **with the
+repeat taken out** (the beacon is every event otherwise, and the voice under it
+none), and events at the repeat's own point in its period are counted, not
+listed.
+
+**End to end (real FFmpeg, the real worker, 2026-10-09):** a 60 s two-microphone
+recording — a voice-like sound at −15 dB, a 1.2 kHz tone at −21 dB, a 0.15 s
+beacon every second at −14 dB, the second microphone 1.1 ms late: the channels
+combined (+2.0 dB measured, +2.4 dB true); the beacon found, 59 repeats averaged
+(−11.5 → +5.4 dB); the voice and the tone found as faint events with clips,
+boxed on the map; every output with its tier, residual, sidecar and custody.
+
+**Limits, plainly:**
+- Averaging needs **sample-exact** repeats — a tone, a played recording, a
+  constant-speed machine. **A person saying the same words twice is not a
+  repeat** in this sense (§12.4c combines such repeats at the word level).
+- A repeat at an **irregular** time (the same jingle now and then) is not found
+  yet: increment 6's template.
+- The thresholds come from synthetic stationary noise. Real noise — wind,
+  traffic, handling, off-air — is not stationary; expect more "possible"
+  events in it, and check the thresholds on Bill's own noise (increment 5).
+- Clips and "keep only what stands out" are **Cleaned**: they take down what
+  the detector did not see — the residual keeps it; listen there too.
+- The combination aligns to whole samples; a sub-sample offset loses a little
+  at the highest frequencies. Noise the channels share is not cancelled
+  (maximal-ratio, not MVDR — see above).
+- Memory: twenty minutes at 48 kHz took 83 s and 2.5 GB in this build's
+  measurement; the repeat search reads at most the first 15 minutes.

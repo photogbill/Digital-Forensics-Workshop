@@ -12,11 +12,20 @@ import ast
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 
 from _support import PACKAGE, ROOT
 
 FORBIDDEN_ROOTS = {"atk", "PySide6", "PySide2", "PyQt5", "PyQt6", "shiboken6",
                    "shiboken2", "numpy", "PIL"}
+
+
+#: Scripts in the package that run as their OWN process, under another
+#: interpreter, and are never imported by the engine (FORENSICS_PLAN §13.2):
+#: the one place a third-party import may appear — only inside a function,
+#: so importing the file itself still loads nothing outside the stdlib.
+WORKER_SCRIPTS = {"media/vp_worker.py": {"torch", "speechbrain"},
+                  "media/restore_worker.py": {"torch", "speechbrain"}}
 
 
 def _sources():
@@ -45,15 +54,42 @@ class Isolation(unittest.TestCase):
         stdlib = set(sys.stdlib_module_names)
         for path in _sources():
             tree = ast.parse(path.read_text(encoding="utf-8"))
+            worker = WORKER_SCRIPTS.get(path.relative_to(PACKAGE).as_posix(),
+                                        set())
+            top = {n.lineno for n in tree.body
+                   if isinstance(n, (ast.Import, ast.ImportFrom))}
             for lineno, root, level in _imports(tree):
                 where = f"{path.relative_to(ROOT)}:{lineno}"
                 if level:                           # relative: inside the package
                     continue
                 self.assertNotIn(root, FORBIDDEN_ROOTS, where)
+                if root in worker:
+                    self.assertNotIn(lineno, top, f"{where}: a worker's "
+                                     "third-party import must sit inside a "
+                                     "function, never at module level")
+                    continue
                 self.assertTrue(root in stdlib or root == "forensics_workshop",
                                 f"{where} imports {root!r}, which is not in "
                                 "the standard library — phase 1 has no "
                                 "third-party dependency, by design")
+
+    def test_no_module_imports_a_worker_script(self):
+        """A worker runs as its own process; importing one into the engine
+        would bring torch into a process that must not have it."""
+        names = {Path(w).stem for w in WORKER_SCRIPTS}
+        for path in _sources():
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    mods = {(node.module or "").split(".")[-1]}
+                    mods |= {a.name for a in node.names}
+                elif isinstance(node, ast.Import):
+                    mods = {a.name.split(".")[-1] for a in node.names}
+                else:
+                    continue
+                self.assertFalse(mods & names,
+                                 f"{path.relative_to(ROOT)}:{node.lineno} "
+                                 "imports a worker script")
 
     def test_init_imports_nothing(self):
         """The airlock's probe is `import forensics_workshop`. If this file

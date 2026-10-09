@@ -43,6 +43,18 @@
     python -m forensics_workshop media-pin   MODEL --by NAME [--note TEXT] [--replace]
     python -m forensics_workshop media-weights MODEL
     python -m forensics_workshop media-negative-control NOISE.wav --out DIR --model GGUF --audiocpp EXE [--text TEXT] [--seeds 3] [--allow-cpu]
+  voice comparison (FORENSICS_PLAN §13) — SpeechBrain ECAPA in its own process
+    python -m forensics_workshop voice-enrol    CASE FILE... --examiner NAME --name "Caller A" [--profile ID] --model-dir DIR --python EXE --ffmpeg EXE [--device auto|cuda|cpu] [--evidence E001]
+    python -m forensics_workshop voice-profiles CASE --examiner NAME
+    python -m forensics_workshop voice-compare  CASE INPUT --examiner NAME --model-dir DIR --python EXE --ffmpeg EXE [--calibration NAME] [--prior 0.5] [--profile ID]... [--evidence E001] [--device auto]
+    python -m forensics_workshop voice-runs     CASE --examiner NAME [--id RUN_ID]
+    python -m forensics_workshop voice-calibrate REFERENCE_DIR --name NAME --out DIR --model-dir DIR --python EXE --ffmpeg EXE [--conditions TEXT] [--max-clips 8]
+    python -m forensics_workshop voice-calibrations --model-dir DIR
+  audio restoration (FORENSICS_PLAN §13.3-13.4) — analyse, recommend, run, export
+    python -m forensics_workshop restore-analyse CASE INPUT --examiner NAME --ffmpeg EXE --python EXE --scratch DIR [--evidence E001] [--no-faint]
+    python -m forensics_workshop restore-run     CASE RUN_ID --examiner NAME --ffmpeg EXE --python EXE --scratch DIR --models-root DIR [--option ID]... [--all] [--force] [--device auto]
+    python -m forensics_workshop restore-list    CASE --examiner NAME [--id RUN_ID]
+    python -m forensics_workshop restore-export  CASE RUN_ID FILE --examiner NAME
     python -m forensics_workshop volume      PATH
     python -m forensics_workshop usb-policy  status | on | off
     python -m forensics_workshop probe-write FOLDER --i-confirm-this-is-not-evidence
@@ -76,6 +88,8 @@ from .artefacts import browser as _browser
 from .artefacts import mobile as _mobile
 from .media import disagreement as _media_dis
 from .media import lab as _media
+from .media import restore as _restore
+from .media import voiceprint as _voice
 from .media import separator as _media_sep
 from .media import weights as _media_weights
 from .case import Case
@@ -577,6 +591,148 @@ def cmd_media_negative_control(args) -> int:
     return 1 if result["speaks_on_noise"] else 0
 
 
+def _voice_kw(args) -> dict:
+    return {"model_dir": args.model_dir, "python": args.python or None,
+            "ffmpeg": args.ffmpeg or None, "device": args.device,
+            "scratch": args.scratch or None}
+
+
+def cmd_voice_enrol(args) -> int:
+    case = _open(args)
+    profile = _voice.enrol(case, args.files, name=args.name,
+                           profile_id=args.profile, evidence_id=args.evidence,
+                           progress=_progress, **_voice_kw(args))
+    shown = {k: v for k, v in profile.items() if k != "embedding"}
+    shown["samples"] = [{k: v for k, v in sample.items()
+                         if k not in ("embedding", "segments")}
+                        for sample in profile.get("samples") or []]
+    _print(shown)
+    return 0
+
+
+def cmd_voice_profiles(args) -> int:
+    rows = _voice.list_profiles(_open(args))
+    for r in rows:
+        print(f"{r['id']:34} {r['name'] or '-':24} samples {r['samples']:>2} "
+              f"speech {r['net_speech_s']:7.1f} s"
+              + (f"  [{r['error']}]" if r.get("error") else ""))
+    print(f"\n{len(rows)} voice profile(s)")
+    return 0
+
+
+def _print_voice(result: dict) -> None:
+    shown = {k: v for k, v in result.items() if k != "embedding"}
+    _print(shown)
+    for m in result.get("matches") or []:
+        what = m.get("shown") or f"raw {m['score']:.3f} (uncalibrated)"
+        print(f"  {m['name']:24} {what:>28}  {m['band']}", file=sys.stderr)
+    for f in result.get("flags") or []:
+        print(f"  [{f['level']}] {f['text']}", file=sys.stderr)
+
+
+def cmd_voice_compare(args) -> int:
+    case = _open(args)
+    _print_voice(_voice.compare(
+        case, args.input, profiles=args.profile or None,
+        calibration=args.calibration, prior=args.prior,
+        evidence_id=args.evidence, progress=_progress, **_voice_kw(args)))
+    return 0
+
+
+def cmd_voice_runs(args) -> int:
+    case = _open(args)
+    if args.id:
+        _print_voice(_voice.load_run(case, args.id))
+        return 0
+    rows = _voice.list_runs(case)
+    for r in rows:
+        print(f"{r['run_id']:34} {r['state']:10} {r['input'][:28]:28} "
+              f"closest {r['closest'] or '-':20} {r['shown'] or ''}"
+              + (f"  [{r['error']}]" if r.get("error") else ""))
+    print(f"\n{len(rows)} voice comparison(s)")
+    return 0
+
+
+def cmd_voice_calibrate(args) -> int:
+    _print(_voice.calibrate(args.reference, name=args.name, out_dir=args.out,
+                            conditions=args.conditions,
+                            max_clips=args.max_clips, progress=_progress,
+                            **_voice_kw(args)))
+    return 0
+
+
+def cmd_voice_calibrations(args) -> int:
+    _print(_voice.load_calibrations(args.model_dir))
+    return 0
+
+
+def _print_restore(report: dict) -> None:
+    _print({k: v for k, v in report.items() if k not in ("options",)}
+           | {"options": [{k: o[k] for k in ("id", "label", "tier", "score",
+                                              "recommended")}
+                          for o in report.get("options") or []]})
+    for i in report.get("issues") or []:
+        print(f"  [{i['severity']}] {i['label']}: {i['measured']}",
+              file=sys.stderr)
+    for o in report.get("options") or []:
+        mark = "*" if o["recommended"] else " "
+        print(f" {mark} {o['id']:16} {o['tier']:9} {o['label']}",
+              file=sys.stderr)
+
+
+def cmd_restore_analyse(args) -> int:
+    case = _open(args)
+    report = _restore.analyse(
+        case, args.input, ffmpeg=args.ffmpeg, python=args.python or None,
+        scratch=args.scratch, evidence_id=args.evidence,
+        faint=not args.no_faint, progress=_progress)
+    _print_restore(report)
+    fa = (report.get("analysis") or {}).get("faint") or {}
+    for e in fa.get("events") or []:
+        print(f"  faint #{e['n']} {e['start_s']:.1f}-{e['end_s']:.1f} s "
+              f"{e['f_lo']:.0f}-{e['f_hi']:.0f} Hz z {e['z']:.1f} "
+              f"({e['broadband_snr_db']:+.0f} dB) {e.get('confidence', '')}",
+              file=sys.stderr)
+    return 0
+
+
+def cmd_restore_run(args) -> int:
+    case = _open(args)
+    which = "all" if args.all else (args.option or "best")
+    report = _restore.run(case, args.run_id, which, ffmpeg=args.ffmpeg,
+                          python=args.python or None, scratch=args.scratch,
+                          models_root=args.models_root, device=args.device,
+                          force=args.force, progress=_progress)
+    _print_restore(report)
+    for r in report.get("results") or []:
+        removed = (r.get("measured") or {}).get("removed") or {}
+        print(f"  {r['option']:16} {r['tier']:9} "
+              f"pauses {removed.get('during_pauses_db')} dB, speech "
+              f"{removed.get('during_speech_db')} dB"
+              + (f"  ERROR {r['error']}" if r.get("error") else ""),
+              file=sys.stderr)
+    return 0
+
+
+def cmd_restore_list(args) -> int:
+    case = _open(args)
+    if args.id:
+        _print_restore(_restore.load_run(case, args.id))
+        return 0
+    rows = _restore.list_runs(case)
+    for r in rows:
+        print(f"{r['run_id']:34} {r['input'][:28]:28} issues {r['issues']:>2} "
+              f"best {r['best'] or '-':16} ran {','.join(r['ran']) or '-'}"
+              + (f"  [{r['error']}]" if r.get("error") else ""))
+    print(f"\n{len(rows)} restoration run(s)")
+    return 0
+
+
+def cmd_restore_export(args) -> int:
+    _print(_restore.export(_open(args), args.run_id, args.file))
+    return 0
+
+
 def cmd_volume(args) -> int:
     _print(blocker.volume_state(args.path).as_dict())
     return 0
@@ -849,6 +1005,90 @@ def build_parser() -> argparse.ArgumentParser:
     mn.add_argument("--seeds", default=str(len(_media.DEFAULT_SEEDS)))
     mn.add_argument("--allow-cpu", action="store_true", help=ALLOW_CPU_HELP)
     mn.set_defaults(fn=cmd_media_negative_control)
+
+    def voice_runtime(sp):
+        sp.add_argument("--model-dir", required=True,
+                        help="the spkrec-ecapa-voxceleb folder")
+        sp.add_argument("--python", default="",
+                        help="a Python with torch and SpeechBrain "
+                             "(ATK: envs\\atk_audio\\Scripts\\python.exe)")
+        sp.add_argument("--ffmpeg", default="", help="FFmpeg")
+        sp.add_argument("--device", default="auto",
+                        choices=["auto", "cuda", "cpu"])
+        sp.add_argument("--scratch", default="",
+                        help="the worker's temp and cache folder (default: "
+                             "tmp beside the model folder)")
+    ve = with_case("voice-enrol", cmd_voice_enrol,
+                   "make a voice profile from known recordings, or add to one")
+    ve.add_argument("files", nargs="+")
+    ve.add_argument("--name", default="")
+    ve.add_argument("--profile", default="", help="add to this profile")
+    ve.add_argument("--evidence", default="")
+    voice_runtime(ve)
+    with_case("voice-profiles", cmd_voice_profiles, "the case's voice profiles")
+    vc = with_case("voice-compare", cmd_voice_compare,
+                   "score a recording against the case's voice profiles "
+                   "(a LEAD, filed into the review queue)")
+    vc.add_argument("input")
+    vc.add_argument("--calibration", default="",
+                    help="a calibration's name; without one, raw scores only")
+    vc.add_argument("--prior", type=float, default=_voice.DEFAULT_PRIOR)
+    vc.add_argument("--profile", action="append", default=[])
+    vc.add_argument("--evidence", default="")
+    voice_runtime(vc)
+    vr = with_case("voice-runs", cmd_voice_runs, "the case's voice comparisons")
+    vr.add_argument("--id", default="")
+    vk = sub.add_parser("voice-calibrate",
+                        help="fit a calibration on a reference set (one "
+                             "subfolder per speaker) and keep it beside the "
+                             "model")
+    vk.add_argument("reference")
+    vk.add_argument("--name", required=True)
+    vk.add_argument("--out", required=True,
+                    help="a folder outside every case for the working files")
+    vk.add_argument("--conditions", default="")
+    vk.add_argument("--max-clips", type=int,
+                    default=_voice.MAX_CLIPS_PER_SPEAKER)
+    voice_runtime(vk)
+    vk.set_defaults(fn=cmd_voice_calibrate)
+    vl = sub.add_parser("voice-calibrations",
+                        help="the calibrations kept beside a voice model")
+    vl.add_argument("--model-dir", required=True)
+    vl.set_defaults(fn=cmd_voice_calibrations)
+
+    def restore_runtime(sp):
+        sp.add_argument("--ffmpeg", required=True)
+        sp.add_argument("--python", default="",
+                        help="a Python with torch and SpeechBrain")
+        sp.add_argument("--scratch", required=True,
+                        help="the worker's temp and cache folder, outside "
+                             "every case")
+    ra = with_case("restore-analyse", cmd_restore_analyse,
+                   "measure a recording and rank what could restore it")
+    ra.add_argument("input")
+    ra.add_argument("--evidence", default="")
+    ra.add_argument("--no-faint", action="store_true",
+                    help="skip the faint-sound search (salience map, clips, "
+                         "repeats)")
+    restore_runtime(ra)
+    rr = with_case("restore-run", cmd_restore_run,
+                   "run the best option of an analysis, chosen ones, or all")
+    rr.add_argument("run_id")
+    rr.add_argument("--option", action="append", default=[])
+    rr.add_argument("--all", action="store_true")
+    rr.add_argument("--force", action="store_true")
+    rr.add_argument("--models-root", required=True,
+                    help="the folder holding the SpeechBrain model folders")
+    rr.add_argument("--device", default="auto",
+                    choices=["auto", "cuda", "cpu"])
+    restore_runtime(rr)
+    rl = with_case("restore-list", cmd_restore_list,
+                   "the case's restoration runs")
+    rl.add_argument("--id", default="")
+    rx = with_case("restore-export", cmd_restore_export,
+                   "copy one restoration output into the case's exports")
+    rx.add_argument("run_id")
+    rx.add_argument("file")
 
     vol = sub.add_parser("volume", help="is this volume read-only?")
     vol.add_argument("path")

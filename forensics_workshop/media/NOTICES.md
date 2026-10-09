@@ -1,4 +1,4 @@
-# Notices — media recovery (FORENSICS_PLAN §12.9, §12.10)
+# Notices — media recovery (FORENSICS_PLAN §12.9, §12.10, §13)
 
 Nothing below is bundled in this repository. The engine runs these
 components as **separate processes** with weights the operator downloads;
@@ -48,3 +48,33 @@ audio.cpp's licence.
 Video input is reduced to audio by an FFmpeg executable the host passes in
 (ATK: `bin\ffmpeg\ffmpeg.exe`), run as a separate process; nothing of it is
 linked or shipped by this engine. Its licence is ATK's review (§1.1).
+
+## SpeechBrain and its models — Apache License 2.0
+
+`vp_worker.py` and `restore_worker.py` import **SpeechBrain 1.1.1**
+(<https://github.com/speechbrain/speechbrain>, Apache-2.0), installed by
+ATK's `get_speechbrain.bat` into `envs\atk_audio`, and load four models it
+downloads from Hugging Face into `models\speechbrain\` — each released by
+the SpeechBrain project under **Apache-2.0** (model cards, read
+2026-10-09):
+
+| model | use | trained on |
+|---|---|---|
+| `speechbrain/spkrec-ecapa-voxceleb` | voice comparison (§13.1) | VoxCeleb 1 + 2 |
+| `speechbrain/metricgan-plus-voicebank` | speech enhancement | VoiceBank-DEMAND |
+| `speechbrain/sepformer-dns4-16k-enhancement` | speech enhancement | DNS Challenge 4 |
+| `speechbrain/sepformer-whamr16k` | two-voice separation | WHAMR! |
+
+`get_speechbrain.bat` saves SpeechBrain's licence text as
+`models\speechbrain\LICENSE-speechbrain.txt`. SpeechBrain asks that work
+using it cite "SpeechBrain: A General-Purpose Speech Toolkit" (Ravanelli et
+al., 2021) and "Open-Source Conversational AI with SpeechBrain 1.0"
+(Ravanelli et al., 2024).
+
+## LibriSpeech — CC BY 4.0
+
+`get_speechbrain.bat` fetches LibriSpeech **test-clean** from OpenSLR
+(<https://www.openslr.org/12>) to fit the first voice calibration. It is
+used only on the examiner's machine and never shipped. Attribution:
+V. Panayotov, G. Chen, D. Povey, S. Khudanpur, "LibriSpeech: an ASR corpus
+based on public domain audio books", ICASSP 2015.

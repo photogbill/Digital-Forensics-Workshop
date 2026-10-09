@@ -380,8 +380,9 @@ def upstream_of_input(case, path) -> tuple[str, str, str]:
     except OSError:
         return "", "", ""
     candidates = []
-    for folder in (runs_root(case).iterdir() if runs_root(case).is_dir()
-                   else ()):
+    # SAM runs and restoration runs (restore.py) keep the same recipe format.
+    roots = (runs_root(case), Path(case.root) / "restoration")
+    for folder in [f for r in roots if r.is_dir() for f in r.iterdir()]:
         try:
             data = _recipe.load_recipe(folder)
         except Exception:                                 # noqa: BLE001
