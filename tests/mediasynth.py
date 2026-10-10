@@ -167,7 +167,7 @@ print("separated %.2f s, seed %d" % (dur, seed))
 '''
 
 FAKE_FFMPEG = r'''
-import math, struct, sys
+import math, os, struct, sys
 args = sys.argv[1:]
 if "-version" in args:
     print("ffmpeg version fake-0 Copyright (c) test double")
@@ -241,6 +241,16 @@ if any(a in args for a in ("-ar", "-ac", "-af", "-filter_complex", "-t")):
         mono = [mono[i] - sum(d[0][i] for d in decoded[1:]) for i in range(n)]
     elif "-af" in args:
         chain = args[args.index("-af") + 1]
+        if "arnndn=" in chain:
+            # FFmpeg's two levels: the graph strips the single quotes, the
+            # option parser turns "\\:" back into ":"
+            value = chain.split("arnndn=m='", 1)[1].split("'", 1)[0]
+            model = value.replace("\\:", ":")
+            print("fake ffmpeg: arnndn model " + model)
+            if not os.path.isfile(model):
+                print("[Parsed_arnndn_0] Error opening model file " + model,
+                      file=sys.stderr)
+                sys.exit(1)
         if chain != "anull":
             mono = [v * 0.9 for v in mono]
     if "-ar" in args:
@@ -392,11 +402,12 @@ if op == "analyse":
         if it.get("faint") is not None:
             fa = a.get("faint") or {"events": [], "lines": [], "clips": []}
             spec = it["faint"]
-            if spec.get("png"):
-                tmp = spec["png"] + ".part"
-                open(tmp, "wb").write(PNG)
-                os.replace(tmp, spec["png"])
-                fa.setdefault("map", {"width": 1, "height": 1})
+            for key, mkey in (("png", "map"), ("png_high", "map_high")):
+                if spec.get(key):
+                    tmp = spec[key] + ".part"
+                    open(tmp, "wb").write(PNG)
+                    os.replace(tmp, spec[key])
+                    fa.setdefault(mkey, {"width": 1, "height": 1})
             for path, clip in zip(spec.get("clips") or [], fa.get("clips") or []):
                 write(path, x[:len(x) // 4], rate)
                 clip["file"] = os.path.basename(path)
@@ -415,7 +426,21 @@ elif op == "dsp":
         sys.exit(3)
     x, rate = read(req["input"])
     write(req["output"], [v * 0.7 for v in x], rate)
-    out = {"dsp": req["dsp"], "info": {"fake": True}, "rate": rate}
+    info = {"fake": True}
+    copy = req.get("copy") or {}
+    if req["dsp"] == "shift" and copy.get("output"):
+        k = int(copy.get("factor") or 10)
+        if copy["kind"] == "expand":
+            write(copy["output"], x[:rate], rate // k)
+            info["copy"] = {"kind": "expand", "factor": k, "rate": rate // k,
+                            "heard_hz": [1800.0, 2000.0],
+                            "start_s": copy.get("start_s") or 0.0,
+                            "end_s": copy.get("end_s") or 1.0}
+        else:
+            write(copy["output"], x[::k], rate)
+            info["copy"] = {"kind": "speed", "factor": k, "rate": rate,
+                            "heard_hz": [32.0, 320.0]}
+    out = {"dsp": req["dsp"], "info": info, "rate": rate}
 elif op == "model":
     if "CRASH" in req["model_dir"]:
         print("RuntimeError: CUDA error: out of memory (simulated)", flush=True)
@@ -432,11 +457,14 @@ elif op == "finish":
         y = (y + [0.0] * len(ref))[:len(ref)]
         write(path, y, rate)
     total = [sum(o[i] if i < len(o) else 0.0 for o in outs) for i in range(len(ref))]
-    write(req["residual"], [a - b for a, b in zip(ref, total)], rate)
-    rel = round(energy_db([a - b for a, b in zip(ref, total)]) - energy_db(ref), 2)
-    out = {"lags": [0] * len(outs), "rate": rate,
-           "change": {"during_speech_db": rel - 6.0, "during_pauses_db": rel,
-                      "added_speech_db": -40.0, "added_pauses_db": -40.0},
+    change = None
+    if req.get("residual"):
+        write(req["residual"], [a - b for a, b in zip(ref, total)], rate)
+        rel = round(energy_db([a - b for a, b in zip(ref, total)]) - energy_db(ref), 2)
+        change = {"during_speech_db": rel - 6.0, "during_pauses_db": rel,
+                  "added_speech_db": -40.0, "added_pauses_db": -40.0}
+    out = {"lags": [0] * len(outs), "rate": rate, "change": change,
+           "aligned": req.get("align", True),
            "outputs": [NOISY for _ in outs]}
 else:
     sys.exit(2)
@@ -445,6 +473,61 @@ json.dump(out, open(sys.argv[2] + ".part", "w"))
 os.replace(sys.argv[2] + ".part", sys.argv[2])
 print("done", flush=True)
 '''
+
+
+FAKE_DEEPFILTER = r'''
+import os, struct, sys
+# A stand-in for DeepFilterNet's deep-filter: -a N -D -o DIR INPUT. Writes
+# DIR/<input's name> as 16-bit PCM at the input's rate, 0.8x the input, as
+# the real one writes 16-bit at the input's rate. An input whose name holds
+# DFNFAIL exits 3 the way a missing DLL would leave it.
+args = sys.argv[1:]
+print("FAKE-DEEPFILTER " + " ".join(args), flush=True)
+out_dir = args[args.index("-o") + 1]
+src = args[-1]
+if "DFNFAIL" in src:
+    print("error: could not load the model (simulated)", flush=True)
+    sys.exit(3)
+raw = open(src, "rb").read()
+pos, rate, tag, data = 12, 48000, 3, b""
+while pos + 8 <= len(raw):
+    cid, size = raw[pos:pos + 4], struct.unpack("<I", raw[pos + 4:pos + 8])[0]
+    body = raw[pos + 8:pos + 8 + size]
+    if cid == b"fmt ":
+        tag, ch, rate = struct.unpack("<HHI", body[:8])
+    elif cid == b"data":
+        data = body
+        break
+    pos += 8 + size + (size & 1)
+x = struct.unpack("<%df" % (len(data) // 4), data[:len(data) // 4 * 4]) if tag == 3 \
+    else [v / 32768.0 for v in struct.unpack("<%dh" % (len(data) // 2), data)]
+pcm = b"".join(struct.pack("<h", max(-32768, min(32767, int(round(v * 0.8 * 32767))))) for v in x)
+fmtb = struct.pack("<HHIIHH", 1, 1, rate, rate * 2, 2, 16)
+body = b"WAVE" + b"fmt " + struct.pack("<I", 16) + fmtb + b"data" + struct.pack("<I", len(pcm)) + pcm
+os.makedirs(out_dir, exist_ok=True)
+with open(os.path.join(out_dir, os.path.basename(src)), "wb") as fh:
+    fh.write(b"RIFF" + struct.pack("<I", len(body)) + body)
+print("Enhanced audio file " + src, flush=True)
+'''
+
+
+def install_deepfilter(folder) -> list:
+    """The fake deep-filter; returns its argv prefix."""
+    root = Path(folder)
+    root.mkdir(parents=True, exist_ok=True)
+    exe = root / "fake_deep_filter.py"
+    exe.write_text(FAKE_DEEPFILTER, encoding="utf-8")
+    return [sys.executable, str(exe)]
+
+
+def fake_rnnoise_model(folder, name: str = "sh.rnnn") -> Path:
+    """A stand-in RNNoise model file (the fake FFmpeg only checks it is
+    there, at the path the filter graph's escaping leads to)."""
+    root = Path(folder)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / name
+    path.write_bytes(b"rnnoise-nu model file (test stand-in)\n")
+    return path
 
 
 def install_restore_worker(folder, measurements: dict | None = None) -> list:

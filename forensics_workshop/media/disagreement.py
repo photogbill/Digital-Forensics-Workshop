@@ -87,17 +87,19 @@ def _band_levels(paths: list, window_s: float, np) -> tuple[list, list]:
     win = np.hanning(n_fft).astype(np.float64)
     norm = n_fft * float(np.sum(win ** 2)) / 2.0
     for path in paths:
-        info, x = wav.read_array(path, np)
-        x = x.astype(np.float64)
+        # a window at a time: an hour of 48 kHz float is gigabytes as one
+        # array, and a windowed SAM run can be that long
+        info = wav.read_info(path)
         per = max(1, int(round(info.rate * window_s)))
-        n_win = max(1, math.ceil(len(x) / per))
+        n_win = max(1, math.ceil(info.frames / per))
         edges = [e for e in BAND_EDGES if e < info.rate / 2] + [info.rate / 2]
         freqs = np.fft.rfftfreq(n_fft, 1.0 / info.rate)
         masks = [(freqs >= lo) & (freqs < hi)
                  for lo, hi in zip(edges[:-1], edges[1:])]
         seed_totals, seed_bands = [], []
         for w in range(n_win):
-            seg = x[w * per:(w + 1) * per]
+            seg = wav.read_array(path, np, w * per, per, info)[1].astype(
+                np.float64)
             seed_totals.append(wav.to_db(float(np.mean(seg ** 2))
                                          if len(seg) else 0.0))
             # Frames stay INSIDE the window (zero-padded at its own end), so

@@ -381,8 +381,14 @@ _TABLE = (
      "channels that hold one sound combined (maximal-ratio, Recovered); a salience "
      "map of what stands out of the recording's own noise over windows to "
      "16 s, a clip of each faint event; tonal lines; repeats averaged "
-     "(Recovered) or a repeating background lifted off (Cleaned). Not yet "
-     "run against the real models."),
+     "(Recovered) or a repeating background lifted off (Cleaned). Speech "
+     "denoisers beside them: DeepFilterNet 3 (deep-filter.exe, MIT/Apache-2.0, "
+     "its own process) and RNNoise (FFmpeg's arnndn, model not subject to "
+     "copyright), each marked SPEECH ONLY. What the file really holds "
+     "(§13.9: a codec's or telephone's cut, a lower rate, no anti-alias "
+     "roll-off, energy below 20 Hz), a linear map above 12 kHz, and bands "
+     "out of hearing moved into it (single-sideband shift, slowed or sped-up "
+     "copies — Measured). Not yet run against the real models."),
     ("voiceprint", "Voice comparison — speaker embeddings, a probability only "
      "through a calibration (§13)", 3, "third-party",
      "forensics_workshop.media.voiceprint", "", "Apache-2.0", "planned",

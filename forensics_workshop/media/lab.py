@@ -33,6 +33,17 @@ the input.
 candidate ranker, so the run shows per-window disagreement between the
 seeds' targets (`disagreement.py`) and choosing one is the examiner's act.
 
+**LONGER THAN SAM TAKES AT ONCE: WINDOWS.** The model's context is 400 s
+(`sam_audio.MAX_AUDIO_S`). A longer recording is cut — sample for sample, a
+measured step — into windows of `WINDOW_S` overlapping by `OVERLAP_S`, each
+window runs as its own SAM pass (anchors moved into its time), and each
+seed's outputs are joined as the windows finish: every window's own stretch
+as SAM wrote it, a `CROSSFADE_S` linear crossfade in the middle of each
+overlap, where both windows have context. The window files and the
+per-window outputs are discarded once joined; their SHA-256s stay in the
+recipe. Bill, 2026-10-09: a 99 min 55 s video ran the codec for 3 min 47 s
+and then failed on the limit.
+
 **REPLAY** re-runs a recipe from the untouched original — refused if the
 original's hash has changed or the weights are not the ones recorded — into
 a new run folder, and compares: the measured stage must be bit-exact; a
@@ -50,9 +61,13 @@ it has been run. Its files go to a harness folder the caller names (ATK:
 
 from __future__ import annotations
 
+import array
 import functools
 import json
+import math
 import os
+import struct
+import time
 from pathlib import Path
 
 from .. import blocker, hashing
@@ -74,6 +89,16 @@ COPY_CHUNK = 1 << 20
 INPUT_NAME = "input.wav"
 REPLAY_TOLERANCE_DB = 1.0
 NEGATIVE_TEXT = "person speaking"
+#: Windows for a recording longer than SAM takes at once (module notes).
+#: ONCE_LIMIT_S leaves room under the model's 400 s for audio.cpp's padding
+#: to the next 40 ms frame.
+WINDOW_S = 360.0
+OVERLAP_S = 20.0
+CROSSFADE_S = 2.0
+ONCE_LIMIT_S = 390.0
+WINDOW_TOOL = "forensics_workshop media windows"
+JOIN_TOOL = "forensics_workshop media join"
+WINDOWS_DIR = "windows"
 #: The negative control flags a window where the target is itself audible
 #: (>= -60 dBFS) AND within 20 dB of the noise it was given: a separator
 #: asked for speech that hands back a fifth of the noise's amplitude or more
@@ -121,6 +146,49 @@ def seed_list(seeds) -> tuple:
         raise MediaError("Seeds must be distinct whole numbers from 0 to "
                          "4294967295 (no random seed: it cannot be replayed).")
     return out
+
+
+def plan_windows(duration_s: float, *, window_s: float = WINDOW_S,
+                 overlap_s: float = OVERLAP_S,
+                 once_limit_s: float = ONCE_LIMIT_S) -> list:
+    """[(start, end)] in seconds: the whole recording when it fits at once,
+    else windows of `window_s` every `window_s - overlap_s`, the last one
+    ending exactly at the end (a full window, overlapping its neighbour
+    more)."""
+    d = float(duration_s)
+    if d <= once_limit_s:
+        return [(0.0, d)]
+    if not (0.0 <= overlap_s < window_s <= once_limit_s):
+        raise MediaError(f"A window of {window_s:g} s overlapping by "
+                         f"{overlap_s:g} s does not fit SAM's "
+                         f"{once_limit_s:g} s.")
+    hop = window_s - overlap_s
+    n = math.ceil((d - window_s) / hop) + 1
+    spans = [(i * hop, i * hop + window_s) for i in range(n - 1)]
+    spans.append((max(0.0, d - window_s), d))
+    return [(round(a, 6), round(b, 6)) for a, b in spans]
+
+
+def crossfades(spans, crossfade_s: float = CROSSFADE_S) -> list:
+    """[(start, end)] seconds of the crossfade at each join: `crossfade_s`
+    (never more than the overlap) centred in the overlap of two windows."""
+    out = []
+    for (_a0, b0), (a1, _b1) in zip(spans, spans[1:]):
+        mid = 0.5 * (a1 + b0)
+        half = 0.5 * min(crossfade_s, b0 - a1)
+        out.append((round(mid - half, 6), round(mid + half, 6)))
+    return out
+
+
+def window_anchors(anchors, start: float, end: float) -> tuple:
+    """The anchors that reach into [start, end), moved into its own time."""
+    out = []
+    for a in anchors:
+        s, e = round(max(a.start, start) - start, 3), \
+            round(min(a.end, end) - start, 3)
+        if s < e:
+            out.append(_sep.make_anchor(a.sign, s, e))
+    return tuple(out)
 
 
 def new_recipe_id() -> str:
@@ -180,6 +248,128 @@ def _case_settle(case, moves, work_dir) -> list[str]:
         notes.append(f"{Path(work).name} still holds files the runtime wrote "
                      "besides the two stems; they are left as they are")
     return notes
+
+
+def _case_cut(case, info, src, dst, first_frame: int, frames: int) -> None:
+    """A stretch of a WAV copied sample for sample into a new WAV inside the
+    case: the same sample format, rate and channels, the bytes of those
+    frames and nothing else."""
+    target = blocker.assert_case_path(case.root, dst)
+    align = info.block_align
+    nbytes = frames * align
+    if info.kind == "float":
+        fmt = struct.pack("<HHIIHHH", 3, info.channels, info.rate,
+                          info.rate * align, align, info.bits, 0)
+        head = (b"fmt " + struct.pack("<I", 18) + fmt + b"fact"
+                + struct.pack("<II", 4, frames))
+    else:
+        fmt = struct.pack("<HHIIHH", 1, info.channels, info.rate,
+                          info.rate * align, align, info.bits)
+        head = b"fmt " + struct.pack("<I", 16) + fmt
+    pad = nbytes & 1
+    with blocker.open_evidence(src) as fin, open(target, "xb") as fout:
+        fout.write(b"RIFF" + struct.pack("<I", 4 + len(head) + 8 + nbytes + pad)
+                   + b"WAVE" + head + b"data" + struct.pack("<I", nbytes))
+        fin.seek(info.data_offset + first_frame * align)
+        left = nbytes
+        while left > 0:
+            chunk = fin.read(min(COPY_CHUNK, left))
+            if not chunk:
+                break
+            fout.write(chunk)
+            left -= len(chunk)
+        fout.write(b"\0" * (left + pad))
+
+
+class _Join:
+    """One output of a windowed run, written as the windows finish: each
+    window's own stretch exactly as SAM wrote it, a linear crossfade where
+    two windows meet. Only a crossfade's worth of samples is held in memory;
+    the file is mono IEEE float32, as audio.cpp writes its stems."""
+
+    def __init__(self, case, dst, rate: int, total: int) -> None:
+        self.case, self.rate, self.total = case, int(rate), int(total)
+        self.path = blocker.assert_case_path(case.root, dst)
+        self.fh = open(self.path, "xb")
+        data = self.total * 4
+        fmt = struct.pack("<HHIIHHH", 3, 1, self.rate, self.rate * 4, 4, 32, 0)
+        self.fh.write(b"RIFF" + struct.pack("<I", 50 + data) + b"WAVE"
+                      + b"fmt " + struct.pack("<I", 18) + fmt + b"fact"
+                      + struct.pack("<II", 4, self.total) + b"data"
+                      + struct.pack("<I", data))
+        self.written = 0
+        self.fade = None                       # (f0, f1) frames, pending
+        self.carry = array.array("d")          # the earlier window's part
+
+    def _put(self, samples) -> None:
+        if len(samples):
+            self.fh.write(array.array("f", samples).tobytes())
+            self.written += len(samples)
+
+    def _mix(self, mine) -> None:
+        f0, f1 = self.fade
+        n = f1 - f0
+        mine = list(mine) + [0.0] * (n - len(mine))
+        old = list(self.carry) + [0.0] * (n - len(self.carry))
+        self._put([old[i] + (mine[i] - old[i]) * ((i + 0.5) / n)
+                   for i in range(n)])
+        self.fade, self.carry = None, array.array("d")
+
+    def add(self, src, start: int, fade_out=None) -> None:
+        """Window output `src`, its first sample at frame `start`; `fade_out`
+        (frames) is where it hands over to the next window."""
+        blocker.assert_case_path(self.case.root, self.path)
+        own_to = fade_out[0] if fade_out else self.total
+        pending = array.array("d")
+        nxt = array.array("d")
+        t0 = int(start)
+        for block in _wav.iter_mono(src, block_frames=self.rate * 10):
+            t1 = t0 + len(block)
+            if self.fade:
+                a, b = max(t0, self.fade[0]), min(t1, self.fade[1])
+                if a < b:
+                    pending.extend(block[a - t0:b - t0])
+                if t1 >= self.fade[1]:
+                    self._mix(pending)
+            if not self.fade:
+                a, b = max(t0, self.written), min(t1, own_to)
+                if a < b:
+                    self._put(block[a - t0:b - t0])
+            if fade_out:
+                a, b = max(t0, fade_out[0]), min(t1, fade_out[1])
+                if a < b:
+                    nxt.extend(block[a - t0:b - t0])
+            t0 = t1
+        if self.fade:                          # a window shorter than said
+            self._mix(pending)
+        if self.written < own_to:
+            self._put(array.array("d", bytes(8 * (own_to - self.written))))
+        self.fade, self.carry = (tuple(fade_out), nxt) if fade_out else \
+            (None, array.array("d"))
+
+    def close(self) -> None:
+        blocker.assert_case_path(self.case.root, self.path)
+        if self.written < self.total:
+            self._put(array.array("d", bytes(8 * (self.total - self.written))))
+        self.fh.close()
+
+
+def _case_discard(case, paths, folders=()) -> None:
+    """Delete files this run made inside the case (window copies, window
+    outputs once joined) and then their folders if empty — their hashes are
+    in the recipe."""
+    for path in paths:
+        target = blocker.assert_case_path(case.root, path)
+        try:
+            os.remove(target)
+        except FileNotFoundError:
+            pass
+    for folder in folders:
+        target = blocker.assert_case_path(case.root, folder)
+        try:
+            os.rmdir(target)
+        except OSError:
+            pass
 
 
 def _harness_dirs(root, name) -> Path:
@@ -450,7 +640,9 @@ def run_sam(case, source, *, text: str, model, audiocpp, anchors=(),
             steps: int | None = None, timeout_s: float | None = None,
             method: str = "auto", replay_of: str = "", progress=None,
             should_cancel=None, allow_cpu: bool = False,
-            heartbeat=None) -> dict:
+            heartbeat=None, window_s: float = WINDOW_S,
+            overlap_s: float = OVERLAP_S,
+            once_limit_s: float = ONCE_LIMIT_S) -> dict:
     """Separate `source` with SAM Audio, every seed, into the open case.
 
     Refused before anything is written: no text, a bad anchor or seed, no
@@ -462,6 +654,10 @@ def run_sam(case, source, *, text: str, model, audiocpp, anchors=(),
     `progress` gets one line per stage; `heartbeat` (default: `progress`)
     gets the "still running" line every few seconds while audio.cpp runs —
     a host that logs `progress` can keep the heartbeat on screen only.
+
+    A recording longer than SAM takes at once runs as windows (module notes);
+    `window_s`, `overlap_s` and `once_limit_s` are recorded with the run so a
+    replay cuts the same windows.
     """
     say = progress or (lambda _line: None)
     beat_to = heartbeat or say
@@ -544,11 +740,30 @@ def run_sam(case, source, *, text: str, model, audiocpp, anchors=(),
                     "outputs": [{"file": input_name, "sha256": input_wav_sha}],
                     "duration_s": round(info.duration_s, 3)})
         _sep.check_anchors(anchors, info.duration_s)
+        spans = plan_windows(info.duration_s, window_s=window_s,
+                             overlap_s=overlap_s, once_limit_s=once_limit_s)
+        windows = None
+        if len(spans) > 1:
+            stage = "windows"
+            windows = _cut_windows(case, run_dir, recipe, input_wav, info,
+                                   input_name, input_wav_sha, spans, say,
+                                   window_s, overlap_s, once_limit_s)
         for n, seed in enumerate(seeds, 1):
             stage = f"seed {seed}"
             if _cancelled(should_cancel):
                 raise Cancelled(f"the SAM run was stopped before seed {seed}")
             where = _sam.backend_label(separator.backend)
+            if windows is not None:
+                _run_windowed_seed(
+                    case, run_dir, recipe, separator, windows, seed, n,
+                    len(seeds), text=text, anchors=anchors, info=info,
+                    prep_chain=prep_chain, model_entry=model_entry,
+                    original=original, upstream_tier=upstream_tier,
+                    hashes=hashes, weights=weights, targets=targets,
+                    memory_bounded=memory_bounded, timeout_s=timeout_s,
+                    should_cancel=should_cancel, say=say, beat_to=beat_to,
+                    where=where)
+                continue
             say(f"SAM Audio, seed {seed} ({n} of {len(seeds)}) — "
                 f"{info.duration_s:.1f} s of audio on {where}…")
             work = _case.make_case_dirs(case.root, MEDIA_DIR, recipe_id,
@@ -642,10 +857,209 @@ def run_sam(case, source, *, text: str, model, audiocpp, anchors=(),
                     "outputs": [o["file"] for o in recipe["outputs"]]})
         _finish(case, run_dir, recipe, targets, method, say)
         raise
+    if windows is not None:
+        _case_discard(case, [run_dir / w["file"] for w in windows["files"]],
+                      [run_dir / WINDOWS_DIR])
+        recipe["notes"].append(
+            f"The {len(windows['files'])} window copies were discarded once "
+            "every seed had run; their SHA-256s are in the windows step, and "
+            "replay cuts them again from the input.")
     recipe["state"] = "completed"
     result = _finish(case, run_dir, recipe, targets, method, say)
     say(f"Done: {len(seeds)} seed(s), INVENTED tier — {result['folder']}")
     return result
+
+
+def _cut_windows(case, run_dir, recipe, input_wav, info, input_name,
+                 input_sha, spans, say, window_s, overlap_s,
+                 once_limit_s) -> dict:
+    """The input cut into its windows (a measured step); returns the plan:
+    spans, frames, the files and the step's index."""
+    _case.make_case_dirs(case.root, MEDIA_DIR, run_dir.name, WINDOWS_DIR)
+    say(f"{info.duration_s / 60:.1f} min is longer than SAM Audio takes at "
+        f"once ({_sam.MAX_AUDIO_S:g} s): {len(spans)} windows of "
+        f"{window_s / 60:g} min, each overlapping the next by {overlap_s:g} s, "
+        "joined afterwards. Cutting them…")
+    files, outs = [], {}
+    for k, (a, b) in enumerate(spans, 1):
+        f0 = int(round(a * info.rate))
+        f1 = min(info.frames, int(round(b * info.rate)))
+        rel = f"{WINDOWS_DIR}/w{k:02d}.wav"
+        _case_cut(case, info, input_wav, run_dir / rel, f0, f1 - f0)
+        sha = hashing.hash_case_file(run_dir / rel).sha256
+        files.append({"file": rel, "sha256": sha, "start_s": a, "end_s": b,
+                      "frames": [f0, f1]})
+        outs[rel] = sha
+    fades = crossfades(spans)
+    recipe["steps"].append(_recipe.step(
+        WINDOW_TOOL, tier="measured",
+        params={"windows": [list(s) for s in spans], "window_s": window_s,
+                "overlap_s": overlap_s, "crossfade_s": CROSSFADE_S,
+                "crossfades": [list(f) for f in fades],
+                "once_limit_s": once_limit_s,
+                "model_limit_s": _sam.MAX_AUDIO_S},
+        inputs={input_name: input_sha}, outputs=outs,
+        note=f"the input cut sample for sample into {len(spans)} windows: "
+             f"SAM Audio takes at most {_sam.MAX_AUDIO_S:g} s at once (10,000 "
+             "frames of 40 ms)"))
+    return {"spans": spans, "files": files, "fades": fades,
+            "step": len(recipe["steps"]) - 1}
+
+
+def _run_windowed_seed(case, run_dir, recipe, separator, windows, seed, n,
+                       of, *, text, anchors, info, prep_chain, model_entry,
+                       original, upstream_tier, hashes, weights, targets,
+                       memory_bounded, timeout_s, should_cancel, say, beat_to,
+                       where) -> None:
+    """One seed over every window, each output joined into the seed's two
+    stems as soon as that window finishes, then discarded."""
+    recipe_id = run_dir.name
+    names = {"target": _recipe.invented_name("target", seed),
+             "residual": _recipe.invented_name("residual", seed)}
+    log_name = f"seed{seed}.audiocpp.log"
+    spans, fades = windows["spans"], windows["fades"]
+    joins: dict = {}
+    per_window, window_outs, first = [], {}, None
+    stage = f"seed {seed}"
+    started = None
+    try:
+        with _case_log(case, run_dir / log_name) as log:
+            for k, (span, wfile) in enumerate(zip(spans, windows["files"]), 1):
+                if _cancelled(should_cancel):
+                    raise Cancelled(f"the SAM run was stopped during seed "
+                                    f"{seed}, before window {k}")
+                eta = ""
+                if started is not None and k > 1:
+                    each = (time.monotonic() - started) / (k - 1)
+                    eta = (f", about {_sam.clock(each * (len(spans) - k + 1))}"
+                           " left for this seed")
+                say(f"SAM Audio, seed {seed} ({n} of {of}), window {k} of "
+                    f"{len(spans)} ({span[0] / 60:.1f}-{span[1] / 60:.1f} min) "
+                    f"on {where}{eta}…")
+                if started is None:
+                    started = time.monotonic()
+                work = _case.make_case_dirs(case.root, MEDIA_DIR, recipe_id,
+                                            f"work-seed{seed}", f"w{k:02d}")
+                mine = window_anchors(anchors, span[0], span[1])
+                raw = separator.separate(
+                    run_dir / wfile["file"], text=text, anchors=mine,
+                    seed=seed, out_dir=work, log=log,
+                    guard=functools.partial(blocker.assert_case_path,
+                                            case.root),
+                    should_cancel=should_cancel,
+                    duration_s=span[1] - span[0],
+                    memory_bounded=memory_bounded, timeout_s=timeout_s,
+                    heartbeat=_beat(beat_to, f"SAM Audio seed {seed} ({n} of "
+                                    f"{of}), window {k} of {len(spans)} on "
+                                    f"{where}"))
+                if raw["state"] == "cancelled":
+                    raise Cancelled(f"the SAM run was stopped during seed "
+                                    f"{seed}, window {k}")
+                got = [Path(raw["target"]).is_file(),
+                       Path(raw["residual"]).is_file()]
+                if raw["state"] != "completed" or not all(got):
+                    why = {"timeout": f"it ran past {raw['timeout_s']:.0f} s "
+                                      "and was stopped",
+                           "failed": "audiocpp_cli " + _sam.exit_sentence(
+                               raw["returncode"])}.get(
+                        raw["state"], "it reported success")
+                    raise MediaError(
+                        f"SAM Audio seed {seed}, window {k} of {len(spans)} "
+                        f"did not finish: {why}"
+                        + ("" if all(got) else " and wrote no target.wav/"
+                           "residual.wav")
+                        + f". audio.cpp said: "
+                        f"{_sam.log_tail(run_dir / log_name) or raw['error'] or '(nothing)'}"
+                        f" — full log {run_dir / log_name}.")
+                record = {"window": k, "span": list(span),
+                          "anchors": [a.as_list() for a in mine],
+                          "elapsed_s": raw["elapsed_s"], "argv": raw["argv"]}
+                for stem in ("target", "residual"):
+                    path = Path(raw[stem])
+                    try:
+                        winfo = _wav.check_stem(path)
+                    except MediaError as exc:
+                        raise MediaError(f"SAM Audio seed {seed}, window {k} "
+                                         f"wrote a broken {stem}: {exc}") \
+                            from exc
+                    rel = f"work-seed{seed}/w{k:02d}/{stem}.wav"
+                    sha = hashing.hash_case_file(path).sha256
+                    window_outs[rel] = sha
+                    record[f"{stem}_sha256"] = sha
+                    if stem not in joins:
+                        joins[stem] = _Join(case, run_dir / names[stem],
+                                            winfo.rate,
+                                            int(round(info.duration_s
+                                                      * winfo.rate)))
+                    rate = joins[stem].rate
+                    fade = fades[k - 1] if k <= len(fades) else None
+                    joins[stem].add(
+                        path, int(round(span[0] * rate)),
+                        (int(round(fade[0] * rate)), int(round(fade[1] * rate)))
+                        if fade else None)
+                if first is None:
+                    first = raw
+                per_window.append(record)
+                _case_discard(case, [raw["target"], raw["residual"]], [work])
+        for j in joins.values():
+            j.close()
+        joins = {}
+        _case_discard(case, [], [run_dir / f"work-seed{seed}"])
+    finally:
+        for j in joins.values():
+            try:
+                j.fh.close()
+            except OSError:
+                pass
+    sizes, shas = {}, {}
+    for stem, name in names.items():
+        _wav.check_stem(run_dir / name)
+        sizes[stem] = os.path.getsize(run_dir / name)
+        shas[stem] = hashing.hash_case_file(run_dir / name).sha256
+    params = dict(first["params"], windows=per_window,
+                  elapsed_s=round(sum(w["elapsed_s"] for w in per_window), 3))
+    recipe["steps"].append(_recipe.step(
+        "audiocpp_cli sam_audio", tier=separator.tier,
+        version=first["tool_version"], params=params, seed=seed,
+        model=model_entry, time_range=[0.0, round(info.duration_s, 3)],
+        inputs={w["file"]: w["sha256"] for w in windows["files"]},
+        outputs=window_outs,
+        note=(first["params"].get("note", "") + " " if first["params"].get(
+            "note") else "") + f"{len(spans)} windows; each window's outputs "
+        "were joined and then discarded — their SHA-256s are here"))
+    sam_step = len(recipe["steps"]) - 1
+    recipe["steps"].append(_recipe.step(
+        JOIN_TOOL, tier="measured",
+        params={"crossfade_s": CROSSFADE_S,
+                "crossfades": [list(f) for f in fades],
+                "windows": [list(s) for s in spans]},
+        inputs=window_outs, outputs={names[s]: shas[s] for s in names},
+        note="each window's own stretch exactly as SAM wrote it, a linear "
+             "crossfade in the middle of each overlap"))
+    chain = prep_chain + [windows["step"], sam_step, len(recipe["steps"]) - 1]
+    landed = []
+    for stem in ("target", "residual"):
+        entry = _output_entry(names[stem], shas[stem], stem, seed,
+                              _recipe.output_tier(
+                                  [recipe["steps"][i] for i in chain],
+                                  upstream_tier), chain, log_name,
+                              size=sizes[stem])
+        recipe["outputs"].append(entry)
+        _write_sidecar(case, run_dir, entry, recipe["steps"], original,
+                       upstream_tier, recipe_id)
+        landed.append({"file": names[stem], "sha256": shas[stem],
+                       "stem": stem, "seed": seed})
+    targets[seed] = run_dir / names["target"]
+    case.custody.record(
+        "media.derived", actor=case.actor(), target=recipe_id,
+        hashes={names[s]: shas[s] for s in names},
+        detail={"recipe_id": recipe_id, "tier": entry["tier"],
+                "input_sha256": hashes.sha256, "stage": stage,
+                "outputs": landed, "seed": seed,
+                "elapsed_s": params["elapsed_s"],
+                "windows": len(spans),
+                "memory_bounded": first["params"]["memory_bounded"],
+                "weights": weights["state"]})
 
 
 # ---------------------------------------------------------------------------
@@ -752,7 +1166,11 @@ def replay(case, recipe_id: str, *, audiocpp, ffmpeg=None, model=None,
     if sha != old["model"]["sha256"]:
         raise MediaError(f"{use_model} is not the weights this recipe used "
                          f"(SHA-256 {sha}, recorded {old['model']['sha256']}).")
-    params = (old["steps"][-1]["params"] if old["steps"] else {})
+    sams = [st for st in old["steps"] if st["tool"] == "audiocpp_cli sam_audio"]
+    params = sams[-1]["params"] if sams else {}
+    # a windowed run is replayed with the same windows
+    cut = next((st["params"] for st in old["steps"]
+                if st["tool"] == WINDOW_TOOL), {})
     new = run_sam(case, path, text=old["prompt"]["text"], model=use_model,
                   audiocpp=audiocpp, anchors=old["prompt"]["anchors"],
                   seeds=old["seeds"], ffmpeg=ffmpeg,
@@ -761,7 +1179,10 @@ def replay(case, recipe_id: str, *, audiocpp, ffmpeg=None, model=None,
                   steps=params.get("num_inference_steps"), method=method,
                   replay_of=old["recipe_id"], progress=progress,
                   should_cancel=should_cancel, allow_cpu=allow_cpu,
-                  heartbeat=heartbeat)
+                  heartbeat=heartbeat,
+                  window_s=cut.get("window_s", WINDOW_S),
+                  overlap_s=cut.get("overlap_s", OVERLAP_S),
+                  once_limit_s=cut.get("once_limit_s", ONCE_LIMIT_S))
     by_name = {o["file"]: o for o in new["outputs"]}
     rows = []
     for out in old["outputs"]:

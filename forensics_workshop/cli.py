@@ -52,7 +52,7 @@
     python -m forensics_workshop voice-calibrations --model-dir DIR
   audio restoration (FORENSICS_PLAN §13.3-13.4) — analyse, recommend, run, export
     python -m forensics_workshop restore-analyse CASE INPUT --examiner NAME --ffmpeg EXE --python EXE --scratch DIR [--evidence E001] [--no-faint]
-    python -m forensics_workshop restore-run     CASE RUN_ID --examiner NAME --ffmpeg EXE --python EXE --scratch DIR --models-root DIR [--option ID]... [--all] [--force] [--device auto]
+    python -m forensics_workshop restore-run     CASE RUN_ID --examiner NAME --ffmpeg EXE --python EXE --scratch DIR --models-root DIR [--option ID]... [--all] [--force] [--device auto] [--deepfilter EXE] [--rnnoise-model FILE]
     python -m forensics_workshop restore-list    CASE --examiner NAME [--id RUN_ID]
     python -m forensics_workshop restore-export  CASE RUN_ID FILE --examiner NAME
     python -m forensics_workshop volume      PATH
@@ -702,13 +702,16 @@ def cmd_restore_run(args) -> int:
     report = _restore.run(case, args.run_id, which, ffmpeg=args.ffmpeg,
                           python=args.python or None, scratch=args.scratch,
                           models_root=args.models_root, device=args.device,
-                          force=args.force, progress=_progress)
+                          force=args.force, deepfilter=args.deepfilter or None,
+                          rnnoise_model=args.rnnoise_model or None,
+                          progress=_progress)
     _print_restore(report)
     for r in report.get("results") or []:
         removed = (r.get("measured") or {}).get("removed") or {}
         print(f"  {r['option']:16} {r['tier']:9} "
               f"pauses {removed.get('during_pauses_db')} dB, speech "
               f"{removed.get('during_speech_db')} dB"
+              + ("  SPEECH ONLY" if r.get("speech_only") else "")
               + (f"  ERROR {r['error']}" if r.get("error") else ""),
               file=sys.stderr)
     return 0
@@ -1081,6 +1084,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the folder holding the SpeechBrain model folders")
     rr.add_argument("--device", default="auto",
                     choices=["auto", "cuda", "cpu"])
+    rr.add_argument("--deepfilter", default="",
+                    help="DeepFilterNet's deep-filter.exe (option dfn)")
+    rr.add_argument("--rnnoise-model", default="",
+                    help="the RNNoise model file, sh.rnnn (option rnnoise)")
     restore_runtime(rr)
     rl = with_case("restore-list", cmd_restore_list,
                    "the case's restoration runs")

@@ -125,6 +125,13 @@ WRITERS = {
     # folders these functions made inside the case — see media/lab.py.
     "media.lab:_case_log": "case",
     "media.lab:_case_settle": "case",
+    # a recording longer than SAM takes at once: its windows cut, each
+    # seed's window outputs joined, and both discarded once joined
+    "media.lab:_case_cut": "case",
+    "media.lab:_Join.__init__": "case",
+    "media.lab:_Join.add": "case",
+    "media.lab:_Join.close": "case",
+    "media.lab:_case_discard": "case",
     "media.lab:_harness_dirs": "harness",
     "media.lab:_harness_log": "harness",
     "media.lab:_harness_settle": "harness",

@@ -88,6 +88,19 @@ TOOL_TIERS = {
     "forensics_workshop restore_worker salience mask": "cleaned",
     "forensics_workshop restore_worker repeating-pattern separation":
         "cleaned",
+    # speech denoisers outside SpeechBrain (§13.4): learned models that keep
+    # what they judge to be speech — Inferred, whatever runs them
+    "ffmpeg arnndn (RNNoise)": "inferred",
+    "deepfilternet deep-filter": "inferred",
+    # a band moved to where it can be heard (§13.9): every frequency in it
+    # moved by the same amount, or the same samples played slower or faster
+    # — nothing added, nothing judged
+    "forensics_workshop restore_worker frequency shift": "measured",
+    # a recording longer than SAM takes at once (§12.9): cut sample for
+    # sample into windows, and the windows' outputs joined with a crossfade
+    # — neither adds anything; the joined stems stay Invented by their chain
+    "forensics_workshop media windows": "measured",
+    "forensics_workshop media join": "measured",
 }
 #: A generative separator, whatever its name gets spelled as.
 _ALWAYS_INVENTED = ("sam_audio", "sam audio")

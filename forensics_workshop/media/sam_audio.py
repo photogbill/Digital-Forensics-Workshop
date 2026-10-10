@@ -47,6 +47,16 @@ ran 180 s on Large where Meta's Python ran out of memory. So: automatic for
 anything longer than twice the one measured length, and the recipe records
 which mode ran. It does not extend the model's context limit.
 
+**THE CONTEXT LIMIT: 400 s AT ONCE (`MAX_AUDIO_S`).** The transformer takes
+at most `transformer.max_positions` = 10,000 latent frames (the pinned GGUF's
+`config.json`), and a frame is the codec's 1,920 samples at 48 kHz (encoder
+rates 2·8·10·12) = 40 ms. Bounded mode refuses more — "SAM Audio bounded mode
+exceeds the model's maximum audio position count", `src/models/sam_audio/
+dit.cpp` — and it says so only AFTER encoding the whole recording: a 99 min
+55 s video ran the codec for 3 min 47 s first (Bill, 2026-10-09). The Media
+Lab therefore runs anything longer as overlapping WINDOWS and joins them
+(`lab.plan_windows`); this adapter only ever sees one window.
+
 **THE GPU IS REQUIRED (Bill, 2026-10-09).** audio.cpp's own default backend
 is `cpu`, and get_sam.bat once fell back to a CPU build without anyone
 noticing: ATK then ran a 5-hour job with no GPU, silent, its log stopped at
@@ -94,6 +104,10 @@ DOCS_URL = ("https://github.com/0xShug0/audio.cpp/blob/v0.9.0/docs/models/"
 OUT_FORMAT = "float32"
 DEFAULT_BACKEND = "cuda"
 MEMORY_BOUNDED_ABOVE_S = 30.0
+#: The model's context (see the module notes): 10,000 frames of 40 ms.
+MAX_POSITIONS = 10000
+FRAME_S = 1920 / 48000
+MAX_AUDIO_S = MAX_POSITIONS * FRAME_S
 #: Relative to the folder holding audiocpp_cli; get_sam.bat copies it there
 #: from the pinned checkout.
 SPEC_OVERRIDE = Path("model_specs") / "sam_audio.json"

@@ -482,6 +482,140 @@ class TheRun(_Fixture):
         self.assertEqual(L.compare_stems(a, c)["result"], "differs")
 
 
+class LongRecordings(_Fixture):
+    """SAM Audio takes at most 400 s at once (10,000 frames of 40 ms) — a
+    99 min 55 s video failed on it, 2026-10-09. Longer recordings run as
+    overlapping windows, joined with a crossfade; here with windows of
+    a second so the suite stays fast."""
+
+    SMALL = {"window_s": 1.0, "overlap_s": 0.4, "once_limit_s": 1.2}
+
+    def test_the_limit_is_the_models_own(self):
+        self.assertEqual(SA.MAX_AUDIO_S, 400.0)
+        self.assertLess(L.ONCE_LIMIT_S, SA.MAX_AUDIO_S)
+        self.assertLessEqual(L.WINDOW_S, L.ONCE_LIMIT_S)
+
+    def test_the_plan_covers_the_recording_in_full_windows(self):
+        self.assertEqual(L.plan_windows(390.0), [(0.0, 390.0)])
+        spans = L.plan_windows(5995.04)          # Bill's 99 min 55 s video
+        self.assertEqual(len(spans), 18)
+        self.assertEqual(spans[0], (0.0, 360.0))
+        self.assertEqual(spans[-1][1], 5995.04)
+        for (a, b), (c, d) in zip(spans, spans[1:]):
+            self.assertAlmostEqual(b - a, L.WINDOW_S)
+            self.assertGreaterEqual(b - c, L.OVERLAP_S - 1e-6, "overlap")
+        self.assertAlmostEqual(spans[-1][1] - spans[-1][0], L.WINDOW_S)
+        fades = L.crossfades(spans)
+        self.assertEqual(len(fades), 17)
+        self.assertEqual(fades[0], (349.0, 351.0))
+        for (f0, f1), (_a, b), (c, _d) in zip(fades, spans, spans[1:]):
+            self.assertTrue(c <= f0 < f1 <= b)
+        with self.assertRaises(MediaError):
+            L.plan_windows(500, window_s=360, overlap_s=360)
+
+    def test_anchors_move_into_each_windows_time(self):
+        from forensics_workshop.media import separator as SEP
+        anchors = SEP.check_anchors(["+1.5:2.5", "-0.1:0.3"])
+        self.assertEqual([a.as_list() for a in
+                          L.window_anchors(anchors, 1.2, 2.2)],
+                         [["+", 0.3, 1.0]])
+        self.assertEqual([a.as_list() for a in
+                          L.window_anchors(anchors, 0.0, 1.0)],
+                         [["-", 0.1, 0.3]])
+        self.assertEqual(L.window_anchors(anchors, 2.6, 3.0), ())
+
+    def test_windows_are_joined_with_a_crossfade(self):
+        """Three windows of constant value: each one's own stretch exactly,
+        a straight-line ramp where two meet."""
+        rate = 1000
+        folder = self.case.root / "media" / "join-test"
+        folder.mkdir(parents=True)
+        parts = []
+        for k, value in enumerate((1.0, 2.0, 4.0)):
+            parts.append(M.write_wav(folder / f"w{k}.wav", [value] * 1000,
+                                     rate=rate, fmt="float32"))
+        spans = [(0.0, 1.0), (0.6, 1.6), (1.2, 2.2)]
+        fades = L.crossfades(spans, crossfade_s=0.2)
+        self.assertEqual(fades, [(0.7, 0.9), (1.3, 1.5)])
+        join = L._Join(self.case, folder / "joined.wav", rate, 2200)
+        for k, path in enumerate(parts):
+            fade = fades[k] if k < len(fades) else None
+            join.add(path, int(spans[k][0] * rate),
+                     (int(fade[0] * rate), int(fade[1] * rate)) if fade
+                     else None)
+        join.close()
+        from forensics_workshop.media import wav as W
+        info = W.read_info(folder / "joined.wav")
+        self.assertEqual((info.frames, info.rate, info.kind), (2200, 1000,
+                                                               "float"))
+        x = [v for block in W.iter_mono(folder / "joined.wav") for v in block]
+        self.assertEqual(x[:700], [1.0] * 700)
+        self.assertEqual(x[900:1300], [2.0] * 400)
+        self.assertEqual(x[1500:], [4.0] * 700)
+        self.assertAlmostEqual(x[700], 1.0 + 0.5 / 200, places=5)
+        self.assertAlmostEqual(x[799], 1.5, places=2)
+        self.assertAlmostEqual(x[1399], 2.0 + 2.0 * 99.5 / 200, places=5)
+        ramp = x[700:900]
+        self.assertTrue(all(b > a for a, b in zip(ramp, ramp[1:])))
+
+    def test_a_long_recording_runs_window_by_window(self):
+        result = self.run_sam(anchors=["+1.5:2.5"], seeds=[1, 2], **self.SMALL)
+        self.assertEqual(result["state"], "completed")
+        folder = Path(result["folder"])
+        self.assertFalse((folder / "windows").exists(), "window copies gone")
+        self.assertFalse(list(folder.glob("work-seed*")))
+        steps = result["steps"]
+        (cut,) = [s for s in steps if s["tool"] == L.WINDOW_TOOL]
+        self.assertEqual(cut["params"]["windows"],
+                         [[0.0, 1.0], [0.6, 1.6], [1.2, 2.2], [1.8, 2.8],
+                          [2.0, 3.0]])
+        self.assertEqual(cut["tier"], "measured")
+        self.assertEqual(len(cut["outputs"]), 5)
+        joins = [s for s in steps if s["tool"] == L.JOIN_TOOL]
+        self.assertEqual(len(joins), 2, "one join per seed")
+        sams = [s for s in steps if s["tool"] == "audiocpp_cli sam_audio"]
+        self.assertEqual(len(sams[0]["params"]["windows"]), 5)
+        self.assertEqual(len(sams[0]["outputs"]), 10)
+        self.assertEqual(sams[0]["params"]["windows"][2]["anchors"],
+                         [["+", 0.3, 1.0]])
+        from forensics_workshop.media import wav as W
+        for out in result["outputs"]:
+            if out["stem"] in ("target", "residual"):
+                info = W.read_info(out["path"])
+                self.assertEqual(info.frames, 3 * 48000, out["file"])
+                self.assertEqual(out["tier"], "invented")
+                tools = [steps[i]["tool"] for i in out["chain"]]
+                self.assertEqual(tools[-3:], [L.WINDOW_TOOL,
+                                              "audiocpp_cli sam_audio",
+                                              L.JOIN_TOOL])
+                side = json.loads((folder / out["sidecar"]).read_text())
+                self.assertEqual(side["tier"], "invented")
+        log = (folder / "seed1.audiocpp.log").read_text()
+        self.assertEqual(log.count("FAKE-ARGV "), 5)
+        self.assertIn('anchors=[[\\"+\\",0.3,1.0]]', log)
+        self.assertTrue(self.case.custody.verify().ok)
+        derived = [r for r in self.case.custody.rows()
+                   if r["action"] == "media.derived"]
+        self.assertEqual(derived[-1]["detail"]["windows"], 5)
+        self.assertTrue(any("window copies were discarded" in n
+                            for n in result["notes"]))
+
+    def test_a_windowed_run_replays_with_the_same_windows(self):
+        first = self.run_sam(seeds=1, **self.SMALL)
+        report = L.replay(self.case, first["recipe_id"], audiocpp=self.cli,
+                          ffmpeg=self.ffmpeg)
+        self.assertTrue(report["reproduced"], report["outputs"])
+        again = L.load_run(self.case, report["replay"])
+        (cut,) = [s for s in again["steps"] if s["tool"] == L.WINDOW_TOOL]
+        self.assertEqual(cut["params"]["window_s"], 1.0)
+        self.assertEqual(len(cut["params"]["windows"]), 5)
+
+    def test_a_short_recording_is_one_pass_as_before(self):
+        result = self.run_sam(seeds=1)
+        self.assertFalse([s for s in result["steps"]
+                          if s["tool"] in (L.WINDOW_TOOL, L.JOIN_TOOL)])
+
+
 class TheGpuAndTheLog(_Fixture):
     """2026-10-09: ATK ran SAM for hours on a CPU build get_sam.bat had
     fallen back to, with nothing on screen and a log that just stopped, and

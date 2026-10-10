@@ -165,6 +165,9 @@ class _Fixture(TempDirCase):
             self.tmp / "bin", m(snr_db=13.0, noise_db=-31.0, rate=44100,
                                 bandwidth_hz=22050.0))
         self.models = M.fake_restore_models(self.tmp / "models" / "speechbrain")
+        self.deepfilter = M.install_deepfilter(self.tmp / "bin")
+        # spaces, a comma and brackets: the filter graph must carry them
+        self.rnnoise = M.fake_rnnoise_model(self.tmp / "models, [rn] noise")
         self.scratch = self.tmp / "atk-data" / "tmp" / "speechbrain"
         self.evidence = self.tmp / "evidence"
         self.clip = M.write_wav(self.evidence / "calls" / "radio.wav",
@@ -181,6 +184,8 @@ class _Fixture(TempDirCase):
         return kw
 
     def run_kw(self, **extra):
+        extra.setdefault("deepfilter", self.deepfilter)
+        extra.setdefault("rnnoise_model", self.rnnoise)
         return self.kw(models_root=self.models, **extra)
 
     def actions(self):
@@ -579,6 +584,246 @@ class FaintRuns(_Fixture):
         self.assertNotIn("faint", report["analysis"])
         self.assertNotIn("repeats", report["analysis"])
         self.assertFalse((Path(report["folder"]) / "salience.png").exists())
+
+
+# ------------------------------- speech-only models, shift into hearing (§13.9)
+CONTENT_PHONE = {"nyquist_hz": 24000.0, "cutoff_hz": 7950.0, "drop_db": 60.0,
+                 "kind": "telephone", "made_at": 16000, "top_hz": 7950.0,
+                 "label": "Wideband call (AMR-WB, HD Voice) or a 16 kHz "
+                          "recording: nothing above about 8.0 kHz",
+                 "folded_risk": False, "infrasound_db": -40.0,
+                 "infrasound": False, "low_cut_hz": 95.0}
+CONTENT_OPEN = {"nyquist_hz": 24000.0, "cutoff_hz": None, "drop_db": None,
+                "kind": "open", "made_at": None, "top_hz": 24000.0,
+                "label": "Content right up to the top (24.0 kHz) with no "
+                         "anti-alias roll-off", "folded_risk": True,
+                "infrasound_db": 3.0, "infrasound": True, "low_cut_hz": None}
+HIGH = {"events": [
+    {"n": 1, "start_s": 0.4, "end_s": 1.2, "peak_s": 0.8, "f_lo": 18500.0,
+     "f_hi": 19600.0, "z": 10.8, "band_snr_db": -6.0,
+     "broadband_snr_db": -26.0, "faint": True, "confidence": "detected"},
+    {"n": 2, "start_s": 1.3, "end_s": 1.8, "peak_s": 1.5, "f_lo": 600.0,
+     "f_hi": 900.0, "z": 9.0, "band_snr_db": -3.0,
+     "broadband_snr_db": -20.0, "faint": True, "confidence": "detected"}],
+    "lines": [{"hz": 15734.0, "prominence_db": 22.0, "z": 80.0, "series": "",
+               "mains": False}],
+    "clips": [], "map": {"width": 1, "height": 1},
+    "map_high": {"width": 1, "height": 1, "f_min": 12000.0,
+                 "frequency_scale": "linear"}}
+
+
+class SpeechModelsAndHearing(unittest.TestCase):
+    """DeepFilterNet and RNNoise beside SpeechBrain's models, each carrying
+    the speech-only warning; what the file really holds; the bands moved
+    into hearing — offered from what was measured, never recommended."""
+
+    def test_the_speech_models_are_offered_and_say_they_are_for_speech(self):
+        opts = {o["id"]: o for o in RS.options(m(snr_db=8.0, noise_db=-30.0))}
+        for oid in ("dfn", "rnnoise", "metricgan", "sepformer-dns4"):
+            self.assertTrue(opts[oid]["speech_only"], oid)
+            self.assertIn(RS.SPEECH_ONLY, opts[oid]["risks"], oid)
+            self.assertEqual(opts[oid]["tier"], "inferred", oid)
+        for oid in ("filters", "fixes-only", "separate"):
+            self.assertFalse(opts.get(oid, {}).get("speech_only"), oid)
+        dfn = next(s for s in opts["dfn"]["steps"] if s["kind"] == "deepfilter")
+        self.assertEqual((dfn["tool"], dfn["tier"]), (RS.DFN_TOOL, "inferred"))
+        self.assertIn(RS.SPEECH_ONLY, dfn["why"])
+        rn = next(s for s in opts["rnnoise"]["steps"] if s["kind"] == "rnnoise")
+        self.assertEqual(rn["tool"], RS.RNNOISE_TOOL)
+        for tool in (RS.DFN_TOOL, RS.RNNOISE_TOOL):
+            self.assertEqual(R.tool_floor(tool), "inferred")
+        self.assertEqual(R.tool_floor(RS.DSP_TOOLS["shift"]), "measured")
+
+    def test_a_wideband_recording_prefers_the_full_band_model(self):
+        narrow = {o["id"]: o["score"] for o in RS.options(
+            m(snr_db=5.0, noise_db=-23.0, noise_steadiness_db=6.0))}
+        wide = {o["id"]: o["score"] for o in RS.options(
+            m(snr_db=5.0, noise_db=-23.0, noise_steadiness_db=6.0, rate=48000,
+              bandwidth_hz=16000.0))}
+        self.assertAlmostEqual(narrow["sepformer-dns4"] - wide["sepformer-dns4"],
+                               RS.NARROW_MODEL_PENALTY)
+        self.assertEqual(narrow["dfn"], wide["dfn"])
+        self.assertEqual(RS.options(m(snr_db=3.0, noise_db=-20.0, rate=48000,
+                                      bandwidth_hz=16000.0))[0]["id"], "dfn")
+
+    def test_the_content_finding_says_what_the_file_holds(self):
+        found = {i["id"]: i for i in RS.issues(m(content=CONTENT_PHONE))}
+        self.assertEqual(found["content"]["severity"], "info")
+        self.assertIn("telephone band", found["content"]["label"])
+        self.assertIn("AMR-WB", found["content"]["measured"])
+        self.assertIn("high-pass, about 95 Hz", found["content"]["measured"])
+        self.assertIn("is in the file to recover", found["content"]["fix"])
+        self.assertNotIn("infrasound", found)
+        found = {i["id"]: i for i in RS.issues(m(content=CONTENT_OPEN))}
+        self.assertIn("folded", found["content"]["fix"])
+        self.assertIn("+3 dB", found["infrasound"]["measured"])
+        # information only: it changes no recommendation
+        self.assertEqual(RS.options(m(content=CONTENT_OPEN, rate=48000))[0][
+            "recommended"], False)
+
+    def test_bands_out_of_hearing_are_offered_moved_into_it(self):
+        a = m(rate=48000, bandwidth_hz=16000.0, content=CONTENT_OPEN,
+              faint=HIGH)
+        opts = {o["id"]: o for o in RS.options(a)}
+        self.assertIn("shift-ev1", opts)
+        self.assertNotIn("shift-ev2", opts, "600 Hz is heard as it is")
+        for oid, stem in (("shift-ev1", "expanded"), ("shift-line", "expanded"),
+                          ("shift-top", "expanded"), ("shift-low", "sped-up")):
+            o = opts[oid]
+            self.assertEqual((o["tier"], o["purpose"], o["copy_stem"]),
+                             ("measured", "faint", stem), oid)
+            self.assertTrue(o["shift"] and not o["recommended"], oid)
+            self.assertEqual(o["steps"][-1]["filters"], [RS.LIFT])
+        ev = opts["shift-ev1"]["steps"][0]["params"]
+        self.assertEqual(ev["band"], [18300.0, 19800.0])
+        self.assertEqual(ev["shift_hz"], RS.SHIFT_TO_HZ - 18300.0)
+        self.assertEqual((ev["copy"]["kind"], ev["copy"]["start_s"],
+                          ev["copy"]["end_s"]), ("expand", 0.0, 2.2))
+        line = opts["shift-line"]["steps"][0]["params"]
+        self.assertEqual(line["band"], [15234.0, 16234.0])
+        top = opts["shift-top"]["steps"][0]["params"]
+        self.assertEqual(top["band"], [RS.SHIFT_HIGH_HZ, 23880.0])
+        low = opts["shift-low"]["steps"][0]["params"]
+        self.assertEqual((low["band"], low["shift_hz"], low["copy"]),
+                         ([2.0, 20.0], RS.SHIFT_LOW_BY,
+                          {"kind": "speed", "factor": RS.SPEED_FACTOR}))
+        # the top of a sound also heard below 12 kHz at that moment (a
+        # click, a door) is not offered: the sound is audible already
+        click = json.loads(json.dumps(HIGH))
+        click["events"][1].update(start_s=0.2, end_s=1.5)
+        self.assertNotIn("shift-ev1", {o["id"] for o in RS.options(
+            m(rate=48000, content=CONTENT_OPEN, faint=click))})
+        # a telephone-band file has nothing up there to move
+        phone = {o["id"] for o in RS.options(
+            m(rate=48000, content=CONTENT_PHONE, faint=HIGH))}
+        self.assertFalse(any(i.startswith("shift-") for i in phone), phone)
+        self.assertEqual(RS.measured_best(
+            [{"option": "shift-top", "measured": {"removed": {
+                "during_pauses_db": -0.1, "during_speech_db": -30.0}}},
+             {"option": "filters", "measured": {"removed": {
+                 "during_pauses_db": -6.0, "during_speech_db": -30.0}}}], m()),
+            "filters")
+
+    def test_the_model_path_is_quoted_for_the_filter_graph(self):
+        with self.assertRaisesRegex(MediaError, "get_speechbrain"):
+            RS.arnndn_filter(None)
+        with self.assertRaisesRegex(MediaError, "not at"):
+            RS.arnndn_filter("/no/such/sh.rnnn")
+
+
+class SpeechModelsAndHearingRuns(_Fixture):
+    def setUp(self):
+        super().setUp()
+        self.worker = M.install_restore_worker(
+            self.tmp / "bin", m(snr_db=8.0, noise_db=-30.0, rate=48000,
+                                bandwidth_hz=16000.0, content=CONTENT_OPEN,
+                                faint=HIGH))
+
+    def test_deepfilternet_runs_as_its_own_process_in_the_case(self):
+        report = RS.analyse(self.case, self.clip, **self.kw())
+        done = RS.run(self.case, report["run_id"], ["dfn"], **self.run_kw())
+        (result,) = done["results"]
+        self.assertEqual((result["error"], result["tier"]), ("", "inferred"))
+        self.assertTrue(result["speech_only"])
+        folder = Path(done["folder"])
+        self.assertTrue(list((folder / "opt-dfn").glob("dfn*/step*.wav")))
+        self.assertTrue(Path(result["residual"]["path"]).is_file())
+        recipe = R.load_recipe(folder)
+        (step,) = [s for s in recipe["steps"] if s["tool"] == RS.DFN_TOOL]
+        self.assertEqual(step["tier"], "inferred")
+        self.assertEqual(step["params"]["args"], ["-a", "20", "-D"])
+        self.assertEqual(step["version"], "unrecorded build", "not the "
+                         "pinned exe: the fake's hash is recorded instead")
+        self.assertEqual(len(step["model"]["exe_sha256"]), 64)
+        log = (folder / "opt-dfn" / "restore.log").read_text("utf-8")
+        self.assertIn("FAKE-DEEPFILTER -a 20 -D -o", log)
+        self.assertIn(RS.SPEECH_ONLY, step["note"])
+
+    def test_rnnoise_runs_in_ffmpeg_and_comes_back_to_the_recordings_rate(self):
+        report = RS.analyse(self.case, self.clip, **self.kw())
+        done = RS.run(self.case, report["run_id"], ["rnnoise"],
+                      **self.run_kw())
+        (result,) = done["results"]
+        self.assertEqual(result["error"], "")
+        recipe = R.load_recipe(Path(done["folder"]))
+        (step,) = [s for s in recipe["steps"] if s["tool"] == RS.RNNOISE_TOOL]
+        self.assertEqual(step["tier"], "inferred")
+        self.assertEqual(step["params"]["rate"], 48000, "the analysis's")
+        self.assertTrue(step["params"]["filters"][0].startswith("arnndn=m='"))
+        self.assertTrue(step["params"]["filters"][0].endswith("':mix=0.9"))
+        self.assertEqual(step["model"]["sha256"],
+                         RS.hashing.hash_case_file(self.rnnoise).sha256)
+        self.assertFalse(step["model"]["pinned"])
+        log = (Path(done["folder"]) / "opt-rnnoise" / "restore.log").read_text(
+            "utf-8")
+        self.assertIn("arnndn model " + str(self.rnnoise).replace("\\", "/"),
+                      log)
+
+    def test_a_missing_speech_model_fails_that_option_only(self):
+        report = RS.analyse(self.case, self.clip, **self.kw())
+        done = RS.run(self.case, report["run_id"], ["filters", "dfn",
+                                                     "rnnoise"],
+                      **self.run_kw(deepfilter=self.tmp / "no" / "df.exe",
+                                    rnnoise_model=self.tmp / "no" / "sh.rnnn"))
+        got = {r["option"]: r["error"] for r in done["results"]}
+        self.assertEqual(got["filters"], "")
+        self.assertIn("get_speechbrain.bat", got["dfn"])
+        self.assertIn("get_speechbrain.bat", got["rnnoise"])
+
+    def test_a_band_moved_into_hearing_keeps_time_and_has_no_residual(self):
+        report = RS.analyse(self.case, self.clip, **self.kw())
+        self.assertEqual(report["analysis"]["content"]["kind"], "open")
+        done = RS.run(self.case, report["run_id"], ["shift-ev1", "shift-low"],
+                      **self.run_kw())
+        got = {r["option"]: r for r in done["results"]}
+        self.assertTrue(all(not r["error"] for r in got.values()),
+                        {k: r["error"] for k, r in got.items()})
+        for oid, stem in (("shift-ev1", "expanded"), ("shift-low", "sped-up")):
+            r = got[oid]
+            self.assertEqual(r["tier"], "measured")
+            self.assertIsNone(r["residual"])
+            self.assertEqual([o["stem"] for o in r["outputs"]],
+                             ["output", stem])
+            copy = Path(r["outputs"][1]["path"])
+            self.assertEqual(copy.name, f"{stem}.wav")
+            side = json.loads(R.sidecar_path(copy).read_text("utf-8"))
+            self.assertEqual(side["tier"], "measured")
+            self.assertEqual(side["chain"][-2]["tool"], RS.DSP_TOOLS["shift"])
+            self.assertEqual(r["copy"]["stem"], stem)
+            got_export = RS.export(self.case, report["run_id"],
+                                   r["outputs"][1]["file"])
+            self.assertTrue(Path(got_export["path"]).is_file())
+        expanded = Path(got["shift-ev1"]["outputs"][1]["path"])
+        self.assertEqual(V._wav.read_info(expanded).rate, 1600, "16 kHz / 10")
+        finish = json.loads((Path(done["folder"]) / "opt-shift-ev1" /
+                             "finish.response.json").read_text("utf-8"))
+        self.assertFalse(finish["aligned"])
+        recipe = R.load_recipe(Path(done["folder"]))
+        (shift,) = [s for s in recipe["steps"]
+                    if s["tool"] == RS.DSP_TOOLS["shift"]
+                    and s["params"]["band"] == [18300.0, 19800.0]]
+        self.assertEqual(len(shift["outputs"]), 2, "the moved band and its "
+                         "slowed copy")
+        self.assertEqual(done["measured_best"], "")
+
+    def test_the_high_map_is_recorded_and_exported(self):
+        clip48 = M.write_wav(self.evidence / "calls" / "wide.wav",
+                             M.tone(0.5, 400.0, 0.3, rate=48000, total=1.0),
+                             rate=48000)
+        report = RS.analyse(self.case, clip48, **self.kw())
+        high = report["analysis"]["faint"]["map_high"]
+        self.assertEqual(high["file"], "salience_high.png")
+        self.assertTrue(Path(high["path"]).is_file())
+        recipe = R.load_recipe(Path(report["folder"]))
+        (step,) = [s for s in recipe["steps"]
+                   if "salience_high.png" in s["outputs"]]
+        self.assertEqual((step["tool"], step["tier"]),
+                         (RS.SALIENCE_TOOL, "measured"))
+        self.assertTrue(Path(RS.export(self.case, report["run_id"],
+                                       "salience_high.png")["path"]).is_file())
+        # a 16 kHz recording has no top worth a second map
+        low = RS.analyse(self.case, self.clip, **self.kw())
+        self.assertFalse((Path(low["folder"]) / "salience_high.png").exists())
 
 
 class WritersAndCommandLine(_Fixture):

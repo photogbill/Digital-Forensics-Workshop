@@ -32,9 +32,20 @@ Four operations, one per request (`"op"`):
   everything on the combination; it draws the SALIENCE MAP (where something
   stands out of the recording's own noise, long-integrated), cuts a clip of
   each faint event, lists TONAL LINES, and looks for REPEATS.
+* **analyse** also says WHAT THE FILE REALLY HOLDS (§13.9): the highest
+  frequency with real content against the top the sample rate allows — a
+  codec's or a telephone's brick wall, a recording made at a lower rate and
+  stored at a higher one, the recorder's own anti-alias filter, or content
+  running right up to the top with no roll-off (sound above the top may
+  have folded down into the band) — and at the bottom, energy below 20 Hz
+  or the recorder's high-pass. And above 12 kHz a second map, LINEAR in
+  frequency, where the mel map squeezes the top together.
 * **dsp** — a faint-sound step: "mask" keeps what stands out of the noise
   (Cleaned), "average" averages waveform repeats (Recovered), "repet" lifts
-  a repeating background off what does not repeat (Cleaned).
+  a repeating background off what does not repeat (Cleaned), "shift" moves
+  a band out of hearing into it (single-sideband: every frequency moved by
+  the same amount, the timing untouched) and writes the same band played
+  slower (above hearing) or faster (below it) — Measured.
 * **finish** — after a restoration chain: each output is ALIGNED to the
   input (a cross-correlation finds the lag — FFmpeg's afftdn delays its
   output by about 25 ms, measured 2026-10-09 — and the output is shifted
@@ -343,7 +354,195 @@ def _bandwidth(freqs, loud, rate) -> float:
     return float(min(top, rate / 2))
 
 
-def analyse(path) -> dict:
+#: Standard sample rates: a file whose content stops near half of one of
+#: these, stored at a higher rate, was made at that rate.
+STD_RATES = (8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000,
+             88200, 96000, 176400, 192000)
+CONTENT_RES_HZ = 1.0
+CONTENT_BAND_HZ = 50.0
+#: A brick wall: the level 100-600 Hz above an edge at least this far under
+#: the level 100-500 Hz below it, and nothing above it climbing back within
+#: CUT_STAYS_DB; searched from CUT_MIN_HZ up (speech itself falls away
+#: below that, smoothly).
+CUT_DROP_DB = 25.0
+CUT_STAYS_DB = 18.0
+CUT_MIN_HZ = 3000.0
+#: An edge above this share of the top is the recorder's own anti-alias
+#: filter, which every proper recording has.
+ANTI_ALIAS_SHARE = 0.88
+#: Content within this many dB of 60-80% of the top, right at the top:
+#: no anti-alias roll-off.
+OPEN_TOP_DB = 6.0
+#: Below 20 Hz within this many dB of 50-200 Hz (per hertz): infrasound
+#: worth listening to. The recorder's high-pass: the bottom this far under.
+INFRA_PRESENT_DB = -10.0
+LOW_CUT_DB = 25.0
+
+
+def _welch(x, rate, res_hz: float):
+    """(freqs, mean power per bin) of the signal with its mean taken off,
+    bins about `res_hz` apart (wider for a short file), in blocks."""
+    import torch
+    n = _pow2(rate / res_hz)
+    while n > 256 and n > x.numel() // 4:
+        n //= 2
+    x = x - x.mean()
+    if x.numel() < n:
+        x = torch.nn.functional.pad(x, (0, n - x.numel()))
+    hop = n // 2
+    win = torch.hann_window(n)
+    K = (x.numel() - n) // hop + 1
+    S = torch.zeros(n // 2 + 1)
+    for a in range(0, K, 64):
+        b = min(K, a + 64)
+        S += torch.stft(x[a * hop:(b - 1) * hop + n], n, hop, window=win,
+                        center=False, return_complex=True).abs().pow(2) \
+            .sum(dim=1)
+    return torch.arange(n // 2 + 1) * rate / n, S / K
+
+
+def _cut_label(cut: float, rate: int) -> tuple[str, str, int | None]:
+    """(kind, label, rate it was made at) for a brick wall at `cut` Hz."""
+    nyq = rate / 2
+    made = None
+    best = None
+    for r in STD_RATES:
+        if r < rate and 0.80 * r / 2 <= cut <= 1.0 * r / 2:
+            score = abs(cut / (r / 2) - 0.92)
+            if best is None or score < best:
+                best, made = score, r
+    if cut >= ANTI_ALIAS_SHARE * nyq:
+        return ("anti-alias", f"Cut at {cut / 1000:.1f} kHz, near the top — "
+                "the recorder's anti-alias filter (or a codec's low-pass at "
+                "a high bit rate): normal", None)
+    if 3000 <= cut <= 4200:
+        return ("telephone", "Telephone call (narrowband — AMR, GSM, G.711) "
+                "or an 8 kHz recording: nothing above about "
+                f"{cut / 1000:.1f} kHz", made)
+    if 6500 <= cut <= 8100:
+        return ("telephone", "Wideband call (AMR-WB, HD Voice) or a 16 kHz "
+                f"recording: nothing above about {cut / 1000:.1f} kHz", made)
+    if 9500 <= cut <= 20500:
+        return ("codec", f"Cut at {cut / 1000:.1f} kHz — a lossy codec's "
+                "low-pass (AAC, MP3, Opus" + (" at a low bit rate" if cut <
+                                              13000 else "") + ")" + (
+                    f" or a {made / 1000:g} kHz recording" if made else ""),
+                made)
+    if made:
+        return ("upsampled", f"Made at {made / 1000:g} kHz, stored at "
+                f"{rate / 1000:g} kHz: nothing above {cut / 1000:.1f} kHz",
+                made)
+    return ("cut", f"Cut at {cut / 1000:.1f} kHz — a filter or codec in the "
+            "chain", None)
+
+
+def content_extent(x, rate) -> dict:
+    """What the file really holds, from its long-term spectrum (50 Hz
+    bands): the highest frequency with real content against the top the
+    rate allows, and why it stops there; and at the bottom, how much lies
+    below 20 Hz and whether the recorder cut it."""
+    import torch
+    nyq = rate / 2
+    out = {"nyquist_hz": nyq, "cutoff_hz": None, "drop_db": None,
+           "kind": "", "label": "", "made_at": None, "top_hz": nyq,
+           "folded_risk": False, "infrasound_db": None, "infrasound": False,
+           "low_cut_hz": None}
+    if x.numel() < 1024:
+        return out
+    freqs, S = _welch(x, rate, CONTENT_RES_HZ)
+    df = float(freqs[1])
+    bw = CONTENT_BAND_HZ
+    nb = max(1, int(nyq // bw))
+    idx = (freqs / bw).long().clamp(max=nb - 1)
+    sums = torch.zeros(nb).index_add_(0, idx, S)
+    cnt = torch.zeros(nb).index_add_(0, idx, torch.ones_like(S))
+    L = 10.0 * torch.log10((sums / cnt.clamp(min=1)).clamp(min=1e-20))
+
+    def med(a, b):
+        a, b = max(0, int(a)), min(nb, int(b))
+        return float(L[a:b].median()) if b > a else None
+
+    ref = med(300 / bw, 3000 / bw)
+    best = None
+    top_i = int(0.995 * nyq / bw)
+    for i in range(int(CUT_MIN_HZ / bw), nb - 3):
+        below = med(i - 10, i - 2)
+        near = med(i + 2, i + 12)
+        if below is None or near is None:
+            continue
+        rest = L[i + 5:top_i]
+        stays = float(torch.quantile(rest, 0.95)) if rest.numel() >= 2 \
+            else near
+        drop = below - near
+        if drop >= CUT_DROP_DB and below - stays >= CUT_STAYS_DB and (
+                best is None or drop > best[0]):
+            best = (drop, i, below)
+    if best is not None:
+        drop, i, below = best
+        # the edge itself: the first band 6 dB under the highest level in
+        # the kilohertz below it that keeps falling (6 dB more within
+        # 300 Hz) — a resampler's gentle transition starts where the
+        # content ends, not where the level has finally gone
+        cut_j = i
+        for j in range(max(int(CUT_MIN_HZ / bw), i - 30), min(nb - 6, i + 12)):
+            peak = float(L[max(0, j - 20):j].max())
+            if float(L[j]) < peak - 6.0 and \
+                    float(L[j + 6]) < float(L[j]) - 6.0:
+                cut_j = j
+                break
+        cut = round(cut_j * bw, 1)
+        kind, label, made = _cut_label(cut, rate)
+        out.update(cutoff_hz=cut, drop_db=round(drop, 1), kind=kind,
+                   label=label, made_at=made, top_hz=cut)
+    else:
+        top = med(0.95 * nyq / bw, 0.99 * nyq / bw)
+        mid = med(0.60 * nyq / bw, 0.80 * nyq / bw)
+        if rate <= 16000:
+            out.update(kind="telephone", label=(
+                f"A {rate / 1000:g} kHz file — a telephone or voice-recorder "
+                f"rate: nothing above {nyq / 1000:g} kHz can be in it"))
+        elif top is not None and mid is not None and ref is not None and \
+                top >= mid - OPEN_TOP_DB and top > ref - 60.0:
+            out.update(kind="open", folded_risk=True, label=(
+                f"Content right up to the top ({nyq / 1000:.1f} kHz) with no "
+                "anti-alias roll-off: either the recorder has no anti-alias "
+                f"filter — so sound above {nyq / 1000:.1f} kHz may have "
+                "folded down into the band (aliasing) — or the noise was "
+                "made digitally"))
+        else:
+            hi = 0
+            for i in range(nb):
+                if ref is not None and float(L[i]) >= ref - 40.0:
+                    hi = i
+            out.update(kind="rolloff", top_hz=round((hi + 1) * bw, 1),
+                       label=f"No hard cut: content tapers off toward "
+                       f"{(hi + 1) * bw / 1000:.1f} kHz (within 40 dB of "
+                       "the 0.3-3 kHz level)")
+    # the bottom: per-hertz density against 50-200 Hz
+    lo_ref = (freqs >= 50) & (freqs <= 200)
+    if df <= 2.0 and bool(lo_ref.any()):
+        r = float(S[lo_ref].mean())
+        infra = (freqs >= max(2.0, 2.5 * df)) & (freqs <= 20.0)
+        if bool(infra.any()) and r > 0:
+            v = 10.0 * math.log10(max(1e-30, float(S[infra].mean())) / r)
+            out["infrasound_db"] = round(v, 1)
+            out["infrasound"] = v >= INFRA_PRESENT_DB and \
+                float(S[infra].mean()) > 1e-16
+        bottom = (freqs >= max(2.0, 2.5 * df)) & (freqs <= 10.0)
+        if bool(bottom.any()) and r > 0 and 10.0 * math.log10(
+                max(1e-30, float(S[bottom].mean())) / r) <= -LOW_CUT_DB:
+            f = 10.0
+            while f < 200.0:
+                sel = (freqs >= f) & (freqs < f + 5.0)
+                if bool(sel.any()) and 10.0 * math.log10(max(1e-30, float(
+                        S[sel].mean())) / r) >= -10.0:
+                    break
+                f += 5.0
+            out["low_cut_hz"] = f
+    return out
+
+
+def analyse(path, content: bool = True) -> dict:
     import torch
     x, rate = read_wav(path)
     n = x.numel()
@@ -359,7 +558,8 @@ def analyse(path) -> dict:
     rumble = 10.0 * math.log10(max(1e-20, quiet[low].sum().item()) /
                                max(1e-20, quiet[mid].sum().item()))
     clip_frac, clip_runs = _clipping(x)
-    return {
+    extra = {"content": content_extent(x, rate)} if content else {}
+    return extra | {
         "duration_s": round(n / rate, 3), "rate": rate,
         "peak_dbfs": round(20.0 * math.log10(max(peak, 1e-9)), 2),
         "rms_dbfs": round(10.0 * math.log10(max(1e-12, float((x * x).mean()))),
@@ -600,13 +800,18 @@ def spectral_change(ref, out, rate) -> dict:
 
 
 def finish_op(req) -> dict:
+    """Align each output to the reference and write the residual. With
+    `"align": false` the outputs are only cut to the reference's length (a
+    band moved in frequency does not correlate with where it came from), and
+    with no `"residual"` none is written: input minus a moved band is not
+    what anything took away."""
     ref, rate = read_wav(req["reference"])
     aligned, lags = [], []
     for src, dst in zip(req["outputs"], req["aligned"]):
         y, r2 = read_wav(src)
         if r2 != rate:
             raise ValueError(f"{src} is {r2} Hz, the input {rate} Hz")
-        lag = estimate_lag(ref, y, rate)
+        lag = estimate_lag(ref, y, rate) if req.get("align", True) else 0
         y = shift(y, lag, ref.numel())
         write_wav(dst, y, rate)
         aligned.append(y)
@@ -616,10 +821,12 @@ def finish_op(req) -> dict:
     total = aligned[0].clone()
     for y in aligned[1:]:
         total = total + y
-    write_wav(req["residual"], ref - total, rate)
-    return {"lags": lags, "rate": rate,
-            "change": spectral_change(ref, total, rate),
-            "outputs": [analyse(p) for p in req["aligned"]]}
+    change = None
+    if req.get("residual"):
+        write_wav(req["residual"], ref - total, rate)
+        change = spectral_change(ref, total, rate)
+    return {"lags": lags, "rate": rate, "change": change,
+            "outputs": [analyse(p, content=False) for p in req["aligned"]]}
 
 
 # ---------------------------------------------------------------------------
@@ -661,6 +868,10 @@ SAL_MIN_HZ = 60.0
 #: bins above it and makes them restless.
 SAL_HIGHPASS_HZ = 30.0
 SAL_GROUPS = 200
+#: The linear high map: from 12 kHz to the top, when the top is above 14.
+SAL_HIGH_FROM_HZ = 12000.0
+SAL_HIGH_MIN_NYQ = 14000.0
+SAL_HIGH_GROUPS = 160
 SAL_MAX_COLS = 1600
 SAL_STORE_FRAMES = 100000
 SAL_BLOCK_S = 120.0
@@ -993,7 +1204,7 @@ class Salience:
     level where any single frame shows it) and scored, in the log domain,
     against that bin's own median and spread. Measured: nothing is changed."""
 
-    def __init__(self, x, rate):
+    def __init__(self, x, rate, top_hz: float | None = None):
         import torch
         self.hp_width = max(3, int(rate / SAL_HIGHPASS_HZ))
         self.x, self.rate = x, rate
@@ -1003,6 +1214,11 @@ class Salience:
         self.F = self.n_fft // 2 + 1
         self.N = max(0, (x.numel() - self.n_fft) // self.hop + 1)
         self.df = rate / self.n_fft
+        # nothing is scored above the file's own content (a codec's brick
+        # wall): up there the 'noise' is digital silence, and the faintest
+        # leak of a sound below would stand out of it
+        self.top_bin = self.F if not top_hz else max(
+            1, min(self.F, int(top_hz / self.df)))
         # a window is used only where the recording holds at least
         # SAL_MIN_WINDOWS of it: its spread is measured over the recording
         # itself, and two or three samples of a 16 s average measure nothing
@@ -1028,6 +1244,19 @@ class Salience:
             self.groups.append((lo, hi))
         self.group_hz = [(round(lo * self.df, 1), round(hi * self.df, 1))
                          for lo, hi in self.groups]
+        # above SAL_HIGH_FROM_HZ, a second set of groups LINEAR in frequency:
+        # the mel scale gives 12 kHz to the top a sliver of the map, and that
+        # is where a beacon, a whine or near-ultrasound sits
+        self.high_groups, self.high_hz = [], []
+        if rate / 2 > SAL_HIGH_MIN_NYQ:
+            b0 = int(SAL_HIGH_FROM_HZ / self.df)
+            count = max(1, min(SAL_HIGH_GROUPS, self.F - b0))
+            for g in range(count):
+                lo = b0 + (self.F - b0) * g // count
+                hi = max(lo + 1, b0 + (self.F - b0) * (g + 1) // count)
+                self.high_groups.append((lo, min(self.F, hi)))
+            self.high_hz = [(round(lo * self.df, 1), round(hi * self.df, 1))
+                            for lo, hi in self.high_groups]
 
     def segment(self, a: int, b: int):
         """Samples [a, b) with the high-pass applied (twice a moving mean
@@ -1109,15 +1338,21 @@ class Salience:
             z = self._edges((L - med[:, None]) / sd[:, None], k0, k1, wt)
             Z = z if Z is None else torch.maximum(Z, z)
         Z[:int(math.ceil(SAL_MIN_HZ / self.df))] = -10.0
+        Z[self.top_bin:] = -10.0
         return Z
 
     def scan(self):
         """(zq, lq): per mel group, the highest z and the mean log power,
-        pooled `tp` frames at a time — the whole recording, small."""
+        pooled `tp` frames at a time — the whole recording, small. The
+        linear high groups, when there are any, into (hzq, hlq) alongside."""
         import torch
         cols = math.ceil(self.N / self.tp)
-        zq = torch.full((SAL_GROUPS, cols), -10.0)
-        lq = torch.zeros((SAL_GROUPS, cols))
+        sets = [(self.groups, torch.full((len(self.groups), cols), -10.0),
+                 torch.zeros((len(self.groups), cols)))]
+        if self.high_groups:
+            sets.append((self.high_groups,
+                         torch.full((len(self.high_groups), cols), -10.0),
+                         torch.zeros((len(self.high_groups), cols))))
         for k0, k1 in self.blocks():
             Z = self.z(k0, k1)
             P = torch.log10(self.power(k0, k1).clamp(min=1e-20)) * 10.0
@@ -1129,13 +1364,16 @@ class Salience:
                     if n > 0 else P
             c0 = k0 // self.tp
             c1 = c0 + (n + pad) // self.tp
-            for g, (lo, hi) in enumerate(self.groups):
-                zg = Z[lo:hi].amax(dim=0).reshape(-1, self.tp).amax(dim=1)
-                lg = P[lo:hi].mean(dim=0).reshape(-1, self.tp).mean(dim=1)
-                zq[g, c0:c1] = zg[:c1 - c0]
-                lq[g, c0:c1] = lg[:c1 - c0]
-        self.zq, self.lq = zq, lq
-        return zq, lq
+            for groups, zq, lq in sets:
+                for g, (lo, hi) in enumerate(groups):
+                    zg = Z[lo:hi].amax(dim=0).reshape(-1, self.tp).amax(dim=1)
+                    lg = P[lo:hi].mean(dim=0).reshape(-1, self.tp).mean(dim=1)
+                    zq[g, c0:c1] = zg[:c1 - c0]
+                    lq[g, c0:c1] = lg[:c1 - c0]
+        self.zq, self.lq = sets[0][1], sets[0][2]
+        self.hzq, self.hlq = (sets[1][1], sets[1][2]) if self.high_groups \
+            else (None, None)
+        return self.zq, self.lq
 
     def events(self, period_s: float = 0.0):
         """Stretches where some band stands out (peak z >= Z_POSSIBLE), each
@@ -1162,26 +1400,43 @@ class Salience:
         if start is not None:
             runs.append((start, last + 1))
         found = []
+        # a sound above SAL_HIGH_FROM_HZ at the same time as one below it
+        # is its own event (a whine or a beacon over a voice) — the split is
+        # made only there, where a voice holds little, so one voice's
+        # separate harmonic regions are not counted as several sounds
+        split = next((g for g in range(SAL_GROUPS)
+                      if self.group_hz[g][0] >= SAL_HIGH_FROM_HZ), SAL_GROUPS)
         for a, b in runs:
             sub = zq[:, a:b]
-            peak = float(sub.max())
-            if peak < self.possible:
+            gmax = sub.max(dim=1).values
+            if float(gmax.max()) < self.possible:
                 continue
-            g_peak = int(sub.max(dim=1).values.argmax())
-            t_peak = a + int(sub[g_peak].argmax())
-            band = (sub.max(dim=1).values >= self.possible).tolist()
-            g_lo = g_hi = g_peak
-            while g_lo > 0 and band[g_lo - 1]:
-                g_lo -= 1
-            while g_hi < SAL_GROUPS - 1 and band[g_hi + 1]:
-                g_hi += 1
-            found.append({"cols": (a, b), "groups": (g_lo, g_hi),
-                          "z": round(peak, 1),
-                          "start_s": round(a * sec, 3),
-                          "end_s": round(b * sec + self.n_fft / self.rate, 3),
-                          "peak_s": round(t_peak * sec, 3),
-                          "f_lo": self.group_hz[g_lo][0],
-                          "f_hi": self.group_hz[g_hi][1]})
+            band = (gmax >= self.possible).tolist()
+            taken = []
+            for lo_g, hi_g in ((0, SAL_GROUPS), (0, split),
+                               (split, SAL_GROUPS)):
+                if hi_g <= lo_g or float(gmax[lo_g:hi_g].max()) < \
+                        self.possible:
+                    continue
+                g_peak = lo_g + int(gmax[lo_g:hi_g].argmax())
+                if any(lo <= g_peak <= hi for lo, hi in taken):
+                    continue
+                peak = float(gmax[g_peak])
+                t_peak = a + int(sub[g_peak].argmax())
+                g_lo = g_hi = g_peak
+                while g_lo > lo_g and band[g_lo - 1]:
+                    g_lo -= 1
+                while g_hi < hi_g - 1 and band[g_hi + 1]:
+                    g_hi += 1
+                taken.append((g_lo, g_hi))
+                found.append({"cols": (a, b), "groups": (g_lo, g_hi),
+                              "z": round(peak, 1),
+                              "start_s": round(a * sec, 3),
+                              "end_s": round(b * sec + self.n_fft / self.rate,
+                                             3),
+                              "peak_s": round(t_peak * sec, 3),
+                              "f_lo": self.group_hz[g_lo][0],
+                              "f_hi": self.group_hz[g_hi][1]})
         self.repeat_events = 0
         if period_s > 0 and len(found) >= REP_MIN_COUNT:
             tol = max(0.05, 0.08 * period_s)
@@ -1240,6 +1495,7 @@ class Salience:
                                           self.null):
             z = self._edges((L - med[:, None]) / sd[:, None], k0, k1, wt)
             z[:int(math.ceil(SAL_MIN_HZ / self.df))] = -10.0
+            z[self.top_bin:] = -10.0
             peak = float(z.max())
             cands.append((peak, wt, wf, z))
         # the shortest, narrowest window that scores nearly as well: a
@@ -1348,26 +1604,31 @@ class Salience:
                 round(k0 * self.hop / self.rate, 3),
                 round(((k1 - 1) * self.hop + self.n_fft) / self.rate, 3))
 
-    def group_of(self, hz: float) -> int:
-        return min(range(SAL_GROUPS), key=lambda i: abs(
-            0.5 * (self.group_hz[i][0] + self.group_hz[i][1]) - hz))
+    def group_of(self, hz: float, high: bool = False) -> int:
+        hz_of = self.high_hz if high else self.group_hz
+        return min(range(len(hz_of)), key=lambda i: abs(
+            0.5 * (hz_of[i][0] + hz_of[i][1]) - hz))
 
-    def image(self, lines=()):
+    def image(self, lines=(), high: bool = False):
         """The salience map as RGB (height = mel groups, top = high), the
         recording's own spectrogram dim beneath, cells that stand out
         coloured from teal (z 3.5) through amber (6) to white-hot (14), each
         event boxed in white, each tonal line dotted in violet across the
-        whole width, guide lines at 1, 2, 4 and 8 kHz."""
+        whole width, guide lines at 1, 2, 4 and 8 kHz. `high`: the linear
+        map from SAL_HIGH_FROM_HZ to the top, guide lines every 2 kHz (4 or
+        8 on a wide band) and a brighter one at 20 kHz, where hearing ends."""
         import torch
-        zq, lq = self.zq, self.lq
+        zq, lq = (self.hzq, self.hlq) if high else (self.zq, self.lq)
+        hz_of = self.high_hz if high else self.group_hz
+        rows = zq.shape[0]
         cols = zq.shape[1]
         step = max(1, math.ceil(cols / SAL_MAX_COLS))
         pad = (-cols) % step
         if pad:
             zq = torch.nn.functional.pad(zq, (0, pad), value=-10.0)
             lq = torch.nn.functional.pad(lq, (0, pad), mode="replicate")
-        zc = zq.reshape(SAL_GROUPS, -1, step).amax(dim=2)
-        lc = lq.reshape(SAL_GROUPS, -1, step).mean(dim=2)
+        zc = zq.reshape(rows, -1, step).amax(dim=2)
+        lc = lq.reshape(rows, -1, step).mean(dim=2)
         lo = float(torch.quantile(lc.flatten()[:1000000], 0.05))
         hi = float(torch.quantile(lc.flatten()[:1000000], 0.995))
         v = ((lc - lo) / max(1e-6, hi - lo)).clamp(0, 1)
@@ -1392,17 +1653,22 @@ class Salience:
         col[top] = colours[-1]
         alpha[top] = 1.0
         rgb = rgb * (1 - alpha[..., None]) + col * alpha[..., None]
-        for khz in (1000.0, 2000.0, 4000.0, 8000.0):
-            if khz >= self.rate / 2:
-                continue
-            g = min(range(SAL_GROUPS),
-                    key=lambda i: abs(self.group_hz[i][0] - khz))
-            rgb[g, ::4] = rgb[g, ::4] * 0.5 + 60.0
+        for hz in self.guides(high):
+            g = min(range(rows), key=lambda i: abs(hz_of[i][0] - hz))
+            if high and hz == 20000.0:
+                rgb[g, ::2] = rgb[g, ::2] * 0.3 + 150.0
+            else:
+                rgb[g, ::4] = rgb[g, ::4] * 0.5 + 60.0
         for line in lines:
-            g = self.group_of(line["hz"])
+            if high and line["hz"] < SAL_HIGH_FROM_HZ:
+                continue
+            g = self.group_of(line["hz"], high)
             rgb[g, ::3] = torch.tensor([200.0, 90.0, 255.0])
         for e in getattr(self, "found", []):
-            c0, c1, g0, g1 = self._box(e, step)
+            box = self._box(e, step, high)
+            if box is None:
+                continue
+            c0, c1, g0, g1 = box
             white = torch.tensor([235.0, 235.0, 235.0])
             rgb[g0, c0:c1] = white
             rgb[g1, c0:c1] = white
@@ -1411,15 +1677,37 @@ class Salience:
         rgb = rgb.clamp(0, 255).round().to(torch.uint8).flip(0)
         return rgb, step
 
-    def _box(self, e, step):
+    def guides(self, high: bool = False) -> list[float]:
+        """The frequencies a map marks with a guide line."""
+        top = self.rate / 2
+        if not high:
+            return [hz for hz in (1000.0, 2000.0, 4000.0, 8000.0, 16000.0)
+                    if hz < top]
+        span = top - SAL_HIGH_FROM_HZ
+        every = 2000.0 if span <= 16000 else 4000.0 if span <= 40000 \
+            else 8000.0
+        out, hz = [], SAL_HIGH_FROM_HZ + every
+        while hz < top:
+            out.append(hz)
+            hz += every
+        if 20000.0 < top and 20000.0 not in out:
+            out.append(20000.0)
+        return sorted(out)
+
+    def _box(self, e, step, high: bool = False):
         """An event's box on the map, from its (refined) times and band,
-        one group and one column of margin."""
+        one group and one column of margin — None on the high map for an
+        event wholly below it."""
+        rows = len(self.high_groups) if high else SAL_GROUPS
+        if high and e["f_hi"] < SAL_HIGH_FROM_HZ:
+            return None
         per = self.tp * self.hop / self.rate * step
         cols = math.ceil(math.ceil(self.N / self.tp) / step)
         c0 = max(0, int(e["start_s"] / per) - 1)
         c1 = min(cols - 1, max(c0 + 2, int(math.ceil(e["end_s"] / per))))
-        g0 = max(0, self.group_of(e["f_lo"]) - 1)
-        g1 = min(SAL_GROUPS - 1, max(g0 + 2, self.group_of(e["f_hi"]) + 1))
+        g0 = max(0, self.group_of(max(e["f_lo"], SAL_HIGH_FROM_HZ) if high
+                                  else e["f_lo"], high) - 1)
+        g1 = min(rows - 1, max(g0 + 2, self.group_of(e["f_hi"], high) + 1))
         return c0, c1, g0, g1
 
 
@@ -1443,7 +1731,7 @@ def write_png(path, rgb) -> None:
 
 # -- tonal lines --------------------------------------------------------------
 
-def tonal_lines(x, rate) -> list[dict]:
+def tonal_lines(x, rate, top_hz: float | None = None) -> list[dict]:
     """Narrow lines in the long-term spectrum: a frequency that stays —
     a motor, a whine, a carrier, a mains family — standing above the
     spectrum either side of it. Prominence in dB over the local median, a
@@ -1475,7 +1763,7 @@ def tonal_lines(x, rate) -> list[dict]:
     lines = []
     for i in range(1, S.numel() - 1):
         f = i * df
-        if f < 20.0 or f > 0.98 * rate / 2:
+        if f < 20.0 or f > 0.98 * rate / 2 or (top_hz and f >= top_hz):
             continue
         if prom[i] < 2.0 or z[i] < 10.0 or S[i] < S[i - 1] or S[i] < S[i + 1]:
             continue
@@ -1714,17 +2002,188 @@ def repeating_apart(x, rate, period_s: float):
     return fg, bg
 
 
+# -- shift into hearing (§13.9) -------------------------------------------------
+
+SHIFT_BLOCK_S = 10.0
+#: An expanded (slowed) copy covers at most this much of the recording.
+EXPAND_MAX_S = 30.0
+COPY_PEAK_DBFS = -3.0
+COPY_MAX_GAIN_DB = 60.0
+
+
+def shift_band(x, rate, lo: float, hi: float, shift_hz: float = 0.0,
+               keep_band: bool = False):
+    """The band [lo, hi] Hz with every frequency in it moved by `shift_hz`
+    (single-sideband: a tone at f lands at f + shift_hz; the timing is the
+    recording's own, so the result lines up with it). In blocks of
+    SHIFT_BLOCK_S, Hann-windowed at 50% overlap (the windows sum to one),
+    each set in the middle of a buffer twice its length so the band
+    filter's ringing has room and nothing wraps round. The band is taken
+    from the positive frequencies only (the analytic signal), its edges
+    raised-cosine, multiplied by exp(j 2 pi shift t) on the recording's
+    clock (in float64, so the phase runs on unbroken from block to block)
+    and its real part added in. (moved, band): `band` is the same band
+    unmoved — a band-pass — when asked for, else None."""
+    import torch
+    nyq = rate / 2
+    if not (0 <= lo < hi <= nyq):
+        raise ValueError(f"the band {lo:g}-{hi:g} Hz is not inside "
+                         f"0-{nyq:g} Hz")
+    if lo + shift_hz <= 0 or hi + shift_hz >= nyq:
+        raise ValueError(f"moving {lo:g}-{hi:g} Hz by {shift_hz:+g} Hz leaves "
+                         f"0-{nyq:g} Hz")
+    n = x.numel()
+    L = _pow2(rate * SHIFT_BLOCK_S)
+    h = L // 2
+    N = 2 * L
+    win = torch.hann_window(L, periodic=True)
+    f = torch.arange(N // 2 + 1, dtype=torch.float64) * rate / N
+    tw = max(1.0, 0.05 * (hi - lo))
+    m = ((f >= lo) & (f <= hi)).double()
+    rise = (f > lo - tw) & (f < lo)
+    m[rise] = 0.5 - 0.5 * torch.cos(math.pi * (f[rise] - (lo - tw)) / tw)
+    fall = (f > hi) & (f < hi + tw)
+    m[fall] = 0.5 + 0.5 * torch.cos(math.pi * (f[fall] - hi) / tw)
+    m[0] = 0.0
+    m[-1] = 0.0
+    # the analytic signal's spectrum: twice the positive frequencies
+    gain = torch.zeros(N, dtype=torch.float32)
+    gain[:N // 2 + 1] = (2.0 * m).float()
+    gain[0] = 0.0
+    xp = torch.nn.functional.pad(x.float(), (h, L))
+    O = L                      # out[O + g] holds sample g of the recording
+    moved = torch.zeros(n + O + N)
+    band = torch.zeros(n + O + N) if keep_band else None
+    buf = torch.zeros(N)
+    s = 0
+    while s < n + h:
+        seg = xp[s:s + L]
+        buf.zero_()
+        buf[h:h + seg.numel()] = seg * win[:seg.numel()]
+        z = torch.fft.ifft(torch.fft.fft(buf) * gain)
+        # buffer position p is recording sample g = s + p - L
+        g0 = s - L
+        if shift_hz:
+            t = torch.arange(g0, g0 + N, dtype=torch.float64)
+            cyc = torch.remainder(t * (shift_hz / rate), 1.0)
+            rot = torch.polar(torch.ones(N, dtype=torch.float64),
+                              2.0 * math.pi * cyc).to(torch.complex64)
+            y = (z * rot).real
+        else:
+            y = z.real
+        moved[O + g0:O + g0 + N] += y
+        if band is not None:
+            band[O + g0:O + g0 + N] += z.real
+        s += h
+    moved = moved[O:O + n].clone()
+    return moved, (band[O:O + n].clone() if band is not None else None)
+
+
+def _to_peak(y, peak_dbfs: float = COPY_PEAK_DBFS):
+    """`y` with its peak brought to `peak_dbfs` (a gain, never more than
+    COPY_MAX_GAIN_DB): (samples, gain dB)."""
+    peak = float(y.abs().max()) if y.numel() else 0.0
+    gain = min(COPY_MAX_GAIN_DB, 20.0 * math.log10(
+        10.0 ** (peak_dbfs / 20.0) / max(peak, 1e-12)))
+    return y * 10.0 ** (gain / 20.0), round(gain, 1)
+
+
+def expand_factor(lo: float, hi: float, rate: int) -> int:
+    """How many times slower to play a band above hearing so its middle
+    lands near 2 kHz — a divisor of the rate when one is near, so the slowed
+    file's rate is a whole number with no rounding."""
+    want = max(2, int(round(0.5 * (lo + hi) / 2000.0)))
+    for d in range(4):
+        for k in (want - d, want + d):
+            if k >= 2 and rate % k == 0:
+                return k
+    return want
+
+
+def _loudest_window(y, rate, seconds: float) -> tuple[float, float]:
+    """The `seconds` of `y` holding the most energy (1 s steps)."""
+    import torch
+    n = y.numel()
+    w = int(seconds * rate)
+    if n <= w:
+        return 0.0, n / rate
+    sec = int(rate)
+    e = torch.stack([y[a:a + sec].pow(2).sum() for a in range(0, n, sec)])
+    k = max(1, int(seconds))
+    sums = torch.nn.functional.avg_pool1d(e[None, None], k, 1)[0, 0] \
+        if e.numel() >= k else e.sum()[None]
+    a = int(torch.argmax(sums))
+    return float(a), float(min(n / rate, a + seconds))
+
+
+def shift_op(x, rate, req) -> tuple:
+    """The "shift" dsp step: the band moved (peak to -3 dBFS) and, when
+    asked, a copy of the same band played slower ("expand": a band above
+    hearing, written at rate/k — the same samples, k times longer, every
+    frequency divided by k) or faster ("speed": a band below hearing, every
+    k-th sample of it written at the full rate — k times shorter, every
+    frequency multiplied by k). (moved samples, info)."""
+    lo, hi = (float(v) for v in req["band"])
+    dshift = float(req.get("shift_hz") or 0.0)
+    copy = req.get("copy") or {}
+    moved, band = shift_band(x, rate, lo, hi, dshift, keep_band=bool(copy))
+    moved, gain = _to_peak(moved)
+    info = {"band_hz": [lo, hi], "shift_hz": dshift,
+            "to_hz": [round(lo + dshift, 1), round(hi + dshift, 1)],
+            "gain_db": gain}
+    _say(f"shift: {lo:.0f}-{hi:.0f} Hz moved by {dshift:+.0f} Hz to "
+         f"{lo + dshift:.0f}-{hi + dshift:.0f} Hz, gain {gain:+.1f} dB")
+    if copy.get("kind") == "expand":
+        k = int(copy.get("factor") or expand_factor(lo, hi, rate))
+        t0, t1 = copy.get("start_s"), copy.get("end_s")
+        if t0 is None or t1 is None:
+            t0, t1 = _loudest_window(band, rate, EXPAND_MAX_S)
+        t0 = max(0.0, float(t0))
+        t1 = min(x.numel() / rate, float(t1), t0 + EXPAND_MAX_S)
+        seg = band[int(t0 * rate):int(t1 * rate)]
+        out_rate = max(1, rate // k)
+        c, cgain = _to_peak(seg)
+        write_wav(copy["output"], c, out_rate)
+        factor = rate / out_rate
+        info["copy"] = {"kind": "expand", "factor": round(factor, 4),
+                        "rate": out_rate, "start_s": round(t0, 3),
+                        "end_s": round(t1, 3), "gain_db": cgain,
+                        "heard_hz": [round(lo / factor, 1),
+                                     round(hi / factor, 1)],
+                        "duration_s": round(seg.numel() / out_rate, 3)}
+        _say(f"expanded copy: {t0:.1f}-{t1:.1f} s played {factor:g}x slower, "
+             f"heard at {lo / factor:.0f}-{hi / factor:.0f} Hz")
+    elif copy.get("kind") == "speed":
+        k = int(copy.get("factor") or 16)
+        if hi >= 0.45 * rate / k:
+            raise ValueError(f"{hi:g} Hz is too high to play {k}x faster at "
+                             f"{rate} Hz")
+        c, cgain = _to_peak(band[::k])
+        write_wav(copy["output"], c, rate)
+        info["copy"] = {"kind": "speed", "factor": k, "rate": rate,
+                        "start_s": 0.0, "end_s": round(x.numel() / rate, 3),
+                        "gain_db": cgain,
+                        "heard_hz": [round(lo * k, 1), round(hi * k, 1)],
+                        "duration_s": round(c.numel() / rate, 3)}
+        _say(f"sped-up copy: {k}x faster, heard at {lo * k:.0f}-"
+             f"{hi * k:.0f} Hz")
+    return moved, info
+
+
 def _public_event(e: dict) -> dict:
     return {k: v for k, v in e.items() if k not in ("cols", "groups")}
 
 
-def faint_op(x, rate, spec: dict, repeats: dict | None = None) -> dict:
+def faint_op(x, rate, spec: dict, repeats: dict | None = None,
+             top_hz: float | None = None) -> dict:
     """The salience map (PNG), the faint events, a clip of each faint one
     (masked to its band, its peak at -3 dBFS), and the tonal lines. When
     something repeats, the events are found in what is left with the repeat
     taken out (averaged repeats subtracted, or the repeating background
     lifted off): a beacon every second would otherwise be every event, and
-    a voice under it none. The map still shows the whole recording."""
+    a voice under it none. The map still shows the whole recording.
+    `top_hz`: the file's content ends there (a codec's brick wall) —
+    nothing above it is scored."""
     rep = repeats or {}
     period = float(rep.get("period_s") or 0.0) if rep.get("found") else 0.0
     base, basis = x, "the recording"
@@ -1741,15 +2200,15 @@ def faint_op(x, rate, spec: dict, repeats: dict | None = None) -> dict:
             _say(f"repeats could not be taken out ({exc}); events from the "
                  "whole recording")
             base, basis = x, "the recording"
-    sal = Salience(base, rate).fit()
+    sal = Salience(base, rate, top_hz).fit()
     sal.scan()
     events = sal.events(period)
     shown = sal
-    if base is not x and spec.get("png"):
-        shown = Salience(x, rate).fit()
+    if base is not x and (spec.get("png") or spec.get("png_high")):
+        shown = Salience(x, rate, top_hz).fit()
         shown.scan()
         shown.found = sal.found
-    out = {"events": [], "clips": [], "lines": tonal_lines(x, rate),
+    out = {"events": [], "clips": [], "lines": tonal_lines(x, rate, top_hz),
            "repeat_events": sal.repeat_events, "events_from": basis,
            "thresholds": {"possible": sal.possible, "detected": sal.detect,
                           "for_cells": int(sal.N * sal.F),
@@ -1781,11 +2240,42 @@ def faint_op(x, rate, spec: dict, repeats: dict | None = None) -> dict:
         out["map"]["lines_rows"] = [
             {"hz": l["hz"], "row": SAL_GROUPS - 1 - shown.group_of(l["hz"])}
             for l in out["lines"] if not l["mains"]]
+    if spec.get("png_high") and shown.high_groups:
+        lines = [l for l in out["lines"] if not l["mains"]]
+        rgb, step = shown.image(lines, high=True)
+        write_png(spec["png_high"], rgb)
+        rows = len(shown.high_groups)
+        out["map_high"] = {
+            "width": int(rgb.shape[1]), "height": int(rgb.shape[0]),
+            "seconds_per_px": round(step * shown.tp * shown.hop / rate, 5),
+            "duration_s": round(x.numel() / rate, 3),
+            "f_min": SAL_HIGH_FROM_HZ, "f_max": rate / 2,
+            "frequency_scale": "linear",
+            "rows_at_hz": {str(int(hz)): rows - 1 - shown.group_of(hz, True)
+                           for hz in shown.guides(True)},
+            "lines_rows": [{"hz": l["hz"],
+                            "row": rows - 1 - shown.group_of(l["hz"], True)}
+                           for l in lines if l["hz"] >= SAL_HIGH_FROM_HZ]}
+        for e in events:
+            box = shown._box(e, step, high=True)
+            if box is not None:
+                c0, c1, g0, g1 = box
+                e["box_high"] = {"x0": int(c0), "x1": int(c1),
+                                 "y0": rows - 1 - int(g1),
+                                 "y1": rows - 1 - int(g0)}
     out["events"] = [_public_event(e) for e in events]
     # the strongest faint events, in time order, one clip each
     slots = spec.get("clips") or []
+    lows = [e for e in events if e["f_hi"] < SAL_HIGH_FROM_HZ]
+
+    def echo(e):
+        # the top of a sound heard below 12 kHz at the same moment (a
+        # click's splatter) comes after every sound that is its own
+        return e["f_lo"] >= SAL_HIGH_FROM_HZ and any(
+            l["start_s"] <= e["peak_s"] <= l["end_s"] for l in lows)
+
     faint = sorted(sorted([e for e in events if e["faint"]],
-                          key=lambda e: -e["z"])[:len(slots)],
+                          key=lambda e: (echo(e), -e["z"]))[:len(slots)],
                    key=lambda e: e["start_s"])
     for path, e in zip(slots, faint):
         y, gain, t0, t1 = sal.clip(e)
@@ -1832,14 +2322,16 @@ def analyse_item(it: dict) -> dict:
             repeats = a["repeats"] = find_repeats(x, rate)
         if it.get("faint") is not None:
             _say("faint sounds: the salience map…")
-            a["faint"] = faint_op(x, rate, it["faint"] or {}, repeats)
+            a["faint"] = faint_op(x, rate, it["faint"] or {}, repeats,
+                                  (a.get("content") or {}).get("cutoff_hz"))
     return a
 
 
 def dsp_op(req) -> dict:
     """A faint-sound step over one mono file: "mask" (keep what stands out
     of the noise), "average" (the repeats averaged), "repet" (what does not
-    repeat)."""
+    repeat), "shift" (a band moved into hearing, and a slowed or sped-up
+    copy of it)."""
     x, rate = read_wav(req["input"])
     kind = req["dsp"]
     if kind == "mask":
@@ -1861,6 +2353,8 @@ def dsp_op(req) -> dict:
             raise ValueError("no repeating period to separate on")
         y, _bg = repeating_apart(x, rate, period)
         info = {"period_s": period}
+    elif kind == "shift":
+        y, info = shift_op(x, rate, req)
     else:
         raise ValueError(f"unknown dsp step {kind!r}")
     write_wav(req["output"], y, rate)

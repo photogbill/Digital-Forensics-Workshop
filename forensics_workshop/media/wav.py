@@ -273,16 +273,23 @@ def window_levels(path, window_s: float = 0.25) -> tuple[WavInfo, list[float]]:
     return info, levels
 
 
-def read_array(path, np):
-    """The whole file as a mono float32 numpy array — for the numpy measure.
+def read_array(path, np, start: int = 0, frames: int | None = None,
+               info: WavInfo | None = None):
+    """The file — or `frames` of it from frame `start` — as a mono float32
+    numpy array, for the numpy measure. A stretch at a time keeps a long
+    recording (a windowed SAM run of an hour and more) out of memory.
 
     `np` is passed in by the caller that already holds numpy, so this module
     never imports it and a bare interpreter can still import this file.
     """
-    info = read_info(path)
+    info = info or read_info(path)
+    align = info.block_align
+    first = max(0, min(int(start), info.frames))
+    count = info.frames - first if frames is None else \
+        max(0, min(int(frames), info.frames - first))
     with blocker.open_evidence(os.fspath(path)) as fh:
-        fh.seek(info.data_offset)
-        raw = fh.read(info.data_bytes)
+        fh.seek(info.data_offset + first * align)
+        raw = fh.read(count * align)
     raw = raw[:len(raw) - len(raw) % info.block_align]
     tag = TAG_FLOAT if info.kind == "float" else TAG_PCM
     if info.bits == 24:

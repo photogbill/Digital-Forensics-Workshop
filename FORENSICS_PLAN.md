@@ -107,7 +107,12 @@ measures what each took and added — and looks for **faint sounds** (§13.8):
 channels that carry one sound combined (maximal-ratio, Recovered), a salience map of what
 stands out of the recording's own noise over windows up to 16 s with a clip of
 each faint event, tonal lines, and repeats averaged (10·log10 N dB) or lifted
-off. **Voice Print**: SpeechBrain's ECAPA speaker
+off. The same day, later: **DeepFilterNet 3 and RNNoise** beside SpeechBrain's
+models, every speech model marked **SPEECH ONLY**; **what the file really
+holds** (a codec's or telephone's cut, a lower rate, no anti-alias roll-off,
+energy below 20 Hz) and a linear map above 12 kHz; and **shift into hearing**
+— a band above or below hearing moved into it, with a slowed or sped-up copy
+(§13.9). **Voice Print**: SpeechBrain's ECAPA speaker
 model (Apache-2.0) in its own process, case-scoped profiles, a percentage only
 when calibrated, Invented audio refused, every comparison a review-queue lead.
 `get_speechbrain.bat` installs it all. Tested here through fakes over the real
@@ -1426,6 +1431,30 @@ error dialog when it probes the exe, keeps an existing CUDA build rather than
 replacing it with a fallback (unless `/replace`), and gives up a stalled
 download after two minutes below 1 KB/s and retries it.
 
+**First real runs, 2026-10-09 (Bill's test install, RTX 3080 Ti Laptop):** the
+CUDA build needed two fixes in `get_sam.bat` beyond Bill's own quote strip of
+PATH and CUDA_PATH — quotes stripped from
+`__VSCMD_PREINIT_PATH` (a console that already had Visual Studio loaded put
+PATH back from it, quoted CUDA entry and all), and a TEMP without spaces for
+nvcc (its own temp files read "Access is denied." under a folder name with
+spaces on a drive with no 8.3 names: `subst` maps a free letter onto
+`build\tmp` for the build). Then SAM ran on the GPU — weights 3.6 GB on CUDA0,
+the codec encoder 3 min 47 s over a **99 min 55 s** video — and stopped:
+"bounded mode exceeds the model's maximum audio position count". **The model
+takes at most 400 s at once** (`transformer.max_positions` 10,000 × the
+codec's 40 ms frame, read from the GGUF's config and `dit.cpp`). So a longer
+recording now runs as **windows**: 6 min each, overlapping 20 s, cut sample
+for sample (Measured), each window its own SAM pass with the anchors moved
+into its time, each seed's outputs joined as the windows finish — every
+window's own stretch exactly as SAM wrote it, a 2 s linear crossfade in the
+middle of each overlap (Measured; the stems stay Invented by their chain) —
+and the window copies and per-window outputs discarded once joined, their
+SHA-256s kept in the recipe. Replay cuts the same windows. The join streams
+(1.6 s per 6-minute window per stem, a crossfade's worth of samples in
+memory); the seed-disagreement measure now reads a window at a time too.
+A 100-minute recording is 18 windows per seed: the GPU time per window is
+not yet measured.
+
 ### 12.10 Licence table for media recovery
 
 Checked 2026-09-30 against code LICENSE files and model cards (details and
@@ -1737,10 +1766,11 @@ counted as all speech).
 | finding | what it offers | tier |
 |---|---|---|
 | hum, rumble, DC, clicks, clipping, narrow band | notches, high-pass, de-click, de-clip, low-pass — shared by every option | Measured / Cleaned (de-clip Inferred) |
-| steady or changing noise | FFmpeg `afftdn`; SpeechBrain MetricGAN+; SepFormer DNS4 | Cleaned; Inferred |
+| steady or changing noise | FFmpeg `afftdn`; SpeechBrain MetricGAN+; SepFormer DNS4; DeepFilterNet 3 (full band); RNNoise (light) — every model **SPEECH ONLY** | Cleaned; Inferred |
 | two talkers | SepFormer WHAMR! — **always offered, never the default** | Inferred |
 | quiet speech | gain, peaks kept under −1 dBFS | Measured |
 | faint sounds, tones, repeats, channels | §13.8 | Measured → Cleaned |
+| what the file holds; sound above or below hearing | §13.9: information, and bands moved into hearing | Measured |
 
 **Ranking**: each option's effect on what was found (severity-weighted) less a
 penalty for its tier (Cleaned 0.3, Inferred 0.8, Invented 2.0): the least
@@ -1760,9 +1790,29 @@ with custody.
 
 ### 13.4 Chains — as built
 
-- **Order:** shared measured/cleaned fixes first, then one model step (16 kHz)
-  or one faint-sound step, then level — kept **out of the residual**, so the
+- **Order:** shared measured/cleaned fixes first, then one model step (16 kHz
+  for SpeechBrain's; DeepFilterNet and RNNoise at the recording's own rate) or
+  one faint-sound step, then level — kept **out of the residual**, so the
   residual says what the chain took, not what the gain changed.
+- **Speech models say so** (Bill, 2026-10-09: *"clearly state that IT
+  specifically made for speech and will likely remove other audio that may or
+  may not be important"*): MetricGAN+, SepFormer DNS4, DeepFilterNet and
+  RNNoise carry `restore.SPEECH_ONLY` — *"Made for speech. It removes whatever
+  it does not judge to be speech: footsteps, engines, doors, even a second
+  faint voice may go with the noise. Its residual keeps all of it. Search for
+  faint sounds in the original, never in this output."* — in their risks,
+  their recipe step, above the options table and on their results. Both new
+  ones keep a little of the input: RNNoise mixes 10% back (`mix=0.9`),
+  DeepFilterNet takes at most 20 dB (`-a 20`). A 16 kHz model on a recording
+  whose speech reaches above 8.5 kHz scores 0.2 lower — it throws that away.
+- **DeepFilterNet runs as its own process**, `deep-filter.exe -a 20 -D -o
+  <fresh folder> <input>`, its one output declared before it starts like
+  every child's writes; the exe's SHA-256 is recorded with the step (the
+  pinned Windows build is named, any other "unrecorded build"). **RNNoise is
+  an FFmpeg filter** (`arnndn`, at 48 kHz, brought back to the recording's
+  rate), the model's path quoted for the filter graph (forward slashes, the
+  drive colon escaped, single quotes; a path holding a quote is refused) and
+  its SHA-256 recorded.
 - **A step's tier is held to its tool's floor** (`recipe.TOOL_TIERS`):
   SpeechBrain models never below Inferred, channel combining and repeat
   averaging Recovered, masks and repeating-background removal Cleaned, the
@@ -1785,6 +1835,9 @@ with custody.
 | `sepformer-whamr16k` | Apache-2.0 | **permitted** | two-voice separation |
 | LibriSpeech test-clean | CC-BY-4.0 | **permitted** (attribution; does not restrict commercial use) | the first calibration, fetched by `get_speechbrain.bat` |
 | FFmpeg filters | ATK's review (§1.1) | arm's length, a separate process | every filter step |
+| DeepFilterNet 3, `deep-filter` 0.5.6 | MIT OR Apache-2.0 | **permitted** | speech enhancement, its own process; pinned SHA-256 |
+| RNNoise (FFmpeg's `arnndn`) | BSD-3-Clause, inside FFmpeg | **permitted** | light speech denoising |
+| rnnoise-models `sh.rnnn` | "not subject to copyright" (the repository's README) | **permitted** | RNNoise's model; pinned SHA-256 |
 | VoxCeleb, VoiceBank, DNS-4, WHAMR! | — | not used | the weights' training data only |
 
 `media/NOTICES.md` carries the notices and the citations SpeechBrain asks for.
@@ -1804,6 +1857,12 @@ with custody.
 6. **Faint sounds, next:** a repeat the examiner marks (a template, matched
    wherever it occurs, not only at a steady period); sub-sample alignment for
    the combination; a voice-shaped (harmonic) detector beside the salience map.
+7. **Speech denoisers, what the file holds, shift into hearing** (§13.9) —
+   built 2026-10-09.
+8. **Approved next** (Bill, 2026-10-09) — §13.10: binaural unmasking as a
+   listening mode; the noise floor as a radar; what the codec remembers;
+   recordings of one event from several phones combined. A candidate: search
+   by description (§13.10.5). ClearerVoice MossFormer2_SE_48K after those.
 
 ### 13.7 Not proven, and honest limits
 
@@ -1823,6 +1882,13 @@ with custody.
   their outputs on off-air audio are leads to listen to, nothing more.
 - **"Measured best" is a pointer**, from energy removed and added — it cannot
   hear a smeared consonant.
+- **DeepFilterNet and RNNoise were run here on Linux** (the 0.5.6 Linux build
+  of `deep-filter` and FFmpeg 7.0.2's `arnndn`) on synthetic speech-like sound
+  and DeepFilterNet's own noisy sample (real speech, 0 dB): pauses down
+  15.5 dB with DeepFilterNet and 11.5 dB with RNNoise, the loudest frames
+  1.5–1.9 dB (mostly the noise in them). **The pinned Windows exe has not run
+  here**; `get_speechbrain.bat` starts it once (`--version`) and says if a
+  Visual C++ runtime is missing.
 
 ### 13.8 Faint sounds — what more data and long listening can recover (built 2026-10-09)
 
@@ -1949,3 +2015,180 @@ boxed on the map; every output with its tier, residual, sidecar and custody.
   (maximal-ratio, not MVDR — see above).
 - Memory: twenty minutes at 48 kHz took 83 s and 2.5 GB in this build's
   measurement; the repeat search reads at most the first 15 minutes.
+
+### 13.9 What the file really holds, and shift into hearing (built 2026-10-09)
+
+Bill, 2026-10-09: *"what about sounds outside of human hearing range ... is
+there a way to shift the frequency of those sounds to something humans can
+hear? ... Is this something that could be targeted?"* — then *"Yes"* to the
+proposal: a check of what the file holds, a linear map of the top, and the
+shift with a time-expanded copy. On phones he noted (and the build agrees)
+that the codec decides more than the microphone: a 48 kHz recording can hold
+18–22 kHz, which most phones pick up (ultrasonic tracking beacons rely on
+it); a call or a low-bit-rate AAC/Opus file is cut far below; true
+infrasound is mostly filtered out.
+
+**What the file holds (Measured, every analysis).** The long-term spectrum at
+about 1 Hz, in 50 Hz bands: a **brick wall** is a band edge above 3 kHz where
+the level 100–600 Hz above it is at least 25 dB under the level just below it
+and nothing above climbs back within 18 dB; the edge itself is the first band
+6 dB under the kilohertz below it that keeps falling (a resampler's gentle
+transition starts where the content ends). The edge is then named: near the
+top (≥ 0.88 of it) the recorder's **anti-alias filter** — or a codec at a high
+bit rate, which cannot be told apart; 3–4.2 kHz a **narrowband call** (AMR,
+GSM, G.711) or an 8 kHz recording; 6.5–8.1 kHz a **wideband call** (AMR-WB)
+or a 16 kHz recording; 9.5–20.5 kHz a **lossy codec's low-pass**, with the
+rate it could also have been made at; otherwise a lower rate stored at a
+higher one. With no wall and content within 6 dB of 60–80% of the top right
+at the top, **no anti-alias roll-off**: either the recorder has none — sound
+above the top may have **folded down into the band** — or the noise was made
+digitally. At the bottom: energy below 20 Hz per hertz against 50–200 Hz
+(**−10 dB or more: "energy below 20 Hz"**), and the recorder's high-pass when
+2–10 Hz is 25 dB down. Shown as information findings; nothing is scored above
+the content's top (§13.8's salience map and tonal lines both stop there: above
+a codec's wall the "noise" is digital silence and the faintest leak of a sound
+below stood out of it with z 35 the first time this ran).
+Measured on files FFmpeg made from 20 s of noise: 8 kHz → 44.1 kHz,
+narrowband, cut 4.0 kHz; 16 kHz → 48 kHz, wideband, 8.05 kHz; AMR-NB
+12.2 kbps decoded at 48 kHz, narrowband, 3.85 kHz, and its 50 Hz high-pass
+found; AAC 48 kbps 15.75 kHz; MP3 64 kbps 11.1 kHz (or a 24 kHz recording);
+MP3 128 kbps mono 20.05 kHz, "near the top"; Opus 16 kbps 20.0 kHz; noise made
+digitally at 48 kHz, no roll-off; a 7 Hz swell +36 dB; a high-pass at 80 Hz
+found at 75 Hz. A file at 16 kHz or less is named by its rate.
+
+**The map above 12 kHz (Measured).** When the top is above 14 kHz the worker
+draws a second salience map, `salience_high.png`: 160 groups **linear** in
+frequency from 12 kHz to the top, guide lines every 2 kHz (4 or 8 on a wide
+band) and a brighter one at 20 kHz. The Restore Audio page switches between
+the two. A sound above 12 kHz at the same moment as one below it is now its
+own event (split only there, so a voice's separate harmonic regions stay one
+sound). In 60 s of pink noise at 48 kHz a 3 s, ±300 Hz FM beacon at 19 kHz
+was found at −20 dB broadband (z 25.5) and −25 dB (z 10.8), not at −30 (there
+it is 10 dB under the noise in its own band); a 15.734 kHz whine (a CRT's line
+frequency) found as a tonal line.
+
+**Shift into hearing (Measured).** A band is moved by a fixed number of hertz
+— **single-sideband**: the band taken from the positive frequencies only (the
+analytic signal), multiplied by exp(j2π·shift·t) on the recording's own
+clock, its real part kept — so every frequency in it moves by the same amount
+and **the result lines up with the recording sample for sample**. Blocks of
+10 s, Hann-windowed at 50% overlap, each in the middle of a buffer twice its
+length so the band filter's ringing never wraps; raised-cosine band edges; the
+phase carried in float64 across blocks. Measured: a 1 kHz-wide band shifted
+18 kHz down came out 134 dB under its error (the first and last 0.1 s, where
+the sound starts abruptly, −30 to −36 dB); outside the moved band −104 dB; five
+minutes at 48 kHz in 1.9 s. The output is brought to −3 dBFS and lifted
+(§13.8's dynamic normaliser) and has **no residual** — the input less a moved
+band is not what anything took away — and is **not aligned** (a moved band
+no longer correlates with where it came from; it keeps time by itself).
+Beside it, a **copy of the same band played slower** (above hearing: the same
+samples written at rate/k, k chosen so the band's middle lands near 2 kHz and
+a whole divisor of the rate when one is near — 18.5–19.5 kHz at 48 kHz is
+played 10× slower, heard at 1.85–1.95 kHz, an event's stretch ±1 s or the
+loudest 30 s of the band) or **faster** (below hearing: every 16th sample of
+the band at the full rate — 7 Hz heard at 112 Hz, the recording 16× shorter).
+Options, offered from the measurements and never recommended:
+- `shift-ev<n>` — up to three events starting at or above 12 kHz, below the
+  content's top, **that are only up there**: the top of a sound also heard
+  below 12 kHz at that moment (a click, a door, a plosive) is not offered — it
+  is audible already. (Seen 2026-10-09: the abrupt ends of a synthetic voice's
+  phrases splattered to 21 kHz with z 47–55 and took every slot from a beacon
+  at z 17 that was only up there. Their clips now come after every sound that
+  is its own, too.)
+- `shift-line` — the strongest steady tone at or above 12 kHz, ±500 Hz,
+  moved so its band starts at 1 kHz: what changes it (a beacon's data, a
+  motor's load) heard as it happens.
+- `shift-top` — everything from 12 kHz to the content's top moved down by
+  11 kHz, nothing chosen.
+- `shift-low` — 2–20 Hz moved up 300 Hz, when there is energy below 20 Hz.
+
+**End to end (real FFmpeg, the real worker, real `deep-filter` 0.5.6 for
+Linux, 2026-10-09):** 40 s at 48 kHz — voice-like phrases in pink noise, a
+19 kHz beacon 22 dB under the noise, a 15.734 kHz whine, a 7 Hz swell. Content
+"anti-alias at 21.5 kHz", energy below 20 Hz +2.6 dB; the beacon found
+(18.2–20.0 kHz); `shift-line` put the whine at 1.5 kHz, `shift-top` at
+4.73 kHz, `shift-low` the swell at 307 Hz and its sped-up copy at 112 Hz;
+DeepFilterNet took 97% of the pause energy; RNNoise ran through the filter
+graph with its model in a folder named `ATK models, x`; custody verified. The
+whole run of nine options took 47 s.
+
+**Limits, plainly:**
+- A moved band **does not sound like itself**: its pitch is wrong by the shift
+  and its harmonics no longer line up. It shows WHAT happens WHEN. The slowed
+  copy keeps the shape (ratios) but not the time.
+- **Nothing above the file's top can be recovered**, and a 48 kHz file holds
+  nothing above 24 kHz: true ultrasound (bats, most rodent repellers, many
+  sensors) needs a recorder at 96 kHz or more. Folded ultrasound (no
+  anti-alias filter) lands at a wrong frequency that one recording cannot
+  undo (§13.10's ideas include two recorders at different rates).
+- "Only up there" is judged from the events found below 12 kHz; a beacon
+  during speech is not offered on its own — `shift-top` still holds it.
+- The content check is one long-term spectrum: a file spliced from two
+  sources shows the higher one's top.
+
+### 13.10 Approved next (Bill, 2026-10-09) — not built yet
+
+Bill, after the "mad science" list: *"I like the idea of Binaural unmasking as
+a listening mode ... I also love the noise floor as a radar. The codec
+remembers what it threw away we should definitely incorporate. I also like
+the idea of being able to take videos of an event from different phones that
+are not colocated ... Lets add those to the build plan."*
+
+**13.10.1 Binaural unmasking — a headphone listening mode.** Below about
+1.5 kHz a sound in noise is markedly easier to hear when it is in opposite
+phase in the two ears while the noise is the same in both (the binaural
+masking level difference, known since the 1940s; largest around 250–800 Hz).
+For a faint event: a stereo clip, left = the recording, right = the
+recording − 2 × the estimated faint part (from the salience mask, or simply
+its band), so the faint sound is inverted between the ears and most of the
+noise is not. Pairs with §13.9: shift a high faint sound down into 250–800 Hz
+first, then unmask it. A "same in both ears / unmasked" toggle on each clip;
+headphones required. Measured (a polarity flip and a mix) from a band,
+Cleaned from the mask. A short blind test (present/absent, random trials)
+ships with it so the gain is measured on the examiner's own ears rather than
+taken from the textbook.
+
+**13.10.2 The noise floor as a radar.** The steady background's spectrum,
+frame by frame, against its own running median: a lane on the timeline where
+it changes shape — the high bands dimming (something passed between the
+source and the microphone), a level step (a door, air conditioning switching),
+a slow tilt (the recorder moved or covered). Measured. Works only with a
+steady source (fan, HVAC, traffic); to be checked on controlled recordings
+(someone walking between a fan and a phone) before it is trusted.
+
+**13.10.3 What the codec remembers.** The original compressed file's own frame
+data, read before decoding, stdlib only: MP3 — block switching (the encoder
+saw a transient) and the bits spent per granule; AAC (phone video, voice
+memos) — short windows and the global gain per frame; AMR calls — the frame
+type, which is the phone's own speech detector deciding speech or silence
+(SID frames). Where the encoder flagged something the decoded audio no longer
+shows, a pointer to look closer; a break in the frame grid is evidence of an
+edit. Measured — the file's own bytes.
+
+**13.10.4 Several recordings of one event, not in one place.** Recordings from
+different phones aligned on shared sounds, each one's clock drift (tens of ppm)
+tracked and taken out (a measured resampling), then combined per frequency by
+§13.8's maximal-ratio method (Recovered), or each time-frequency cell taken
+from the recording that holds it best (Cleaned). The gain is large where each
+phone's noise is its own (wind on one microphone, a talker beside one phone,
+handling) and small for a sound every phone hears loudly (a crowd); the phone
+next to the talker mostly wins. Each phone's automatic gain, noise
+suppression and AAC make the alignment harder, not impossible.
+
+**13.10.5 Search by description — a candidate (licences first).** DCASE 2026
+Task 6, "audio moment retrieval from long audio": a text query ("a car door
+slams") returns the moments in a long recording that match it. The baseline
+pairs Microsoft's CLAP audio-text embeddings with a detection network; 21
+teams, the best 48.6% top-1 at strict overlap against the baseline's 13.6%
+(overview, arXiv 2609.12484, Sept 2026) — on clean YouTube audio. So a
+**lead-finder** like Voice Print, never a detector: a "search by description"
+box over a case's recordings filing ranked moments in the review queue, and a
+"sounds like" label on each salience event. Runs on ATK's torch environment.
+**Before building: confirm the CLAP weights' and the baseline code's
+licences** — the DCASE page states neither.
+
+Also noted, not approved: two recorders at different rates to unfold aliased
+ultrasound (co-prime sampling); a steady tone's phase as a motion sensor;
+the reverberation tail of a sound from before "record" was pressed; the
+`conjoined-burgers` RNNoise model (general sound, recording noise — kept,
+not speech-only) beside the speech one.

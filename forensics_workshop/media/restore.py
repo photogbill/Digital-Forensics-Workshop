@@ -55,6 +55,23 @@ repeat (Cleaned). Options: listen in the faint band (Measured), keep only
 what stands out (Cleaned), average the repeats, lift off the background,
 the combination alone.
 
+**SPEECH DENOISERS** beside SpeechBrain's: DeepFilterNet 3 (full band,
+deep-filter.exe as its own process) and RNNoise (FFmpeg's arnndn, light).
+Every speech model — these and MetricGAN+ and SepFormer-DNS4 — carries
+SPEECH_ONLY on its option, its step and the page (Bill, 2026-10-09:
+*"clearly state that IT specifically made for speech and will likely remove
+other audio that may or may not be important"*).
+
+**WHAT THE FILE REALLY HOLDS, AND SHIFT INTO HEARING (§13.9)** — the
+analysis says where the file's real content ends against the top its rate
+allows (a codec's or a telephone's cut, a lower rate stored at a higher one,
+the anti-alias filter, or no roll-off at all — folded ultrasound possible)
+and whether there is energy below 20 Hz; above 12 kHz a second, linear map.
+A band out of hearing is moved into it — every frequency by the same
+amount, so it keeps time with the recording — with a slowed copy (above
+hearing) or a sped-up one (below it). Measured: nothing added, nothing
+judged; no residual, because nothing was taken away.
+
 Everything lives in the case, `<case>/restoration/<run-id>/`, with
 `media.restore.*` custody; the run's `recipe.json` is the same format as a
 SAM run's, so a restored file fed back into the Media Lab or the voice
@@ -90,10 +107,53 @@ SALIENCE_TOOL = "forensics_workshop restore_worker salience map"
 DSP_TOOLS = {"mask": "forensics_workshop restore_worker salience mask",
              "average": "forensics_workshop restore_worker repeat averaging",
              "repet": "forensics_workshop restore_worker "
-                      "repeating-pattern separation"}
-DSP_TIERS = {"mask": "cleaned", "average": "recovered", "repet": "cleaned"}
+                      "repeating-pattern separation",
+             "shift": "forensics_workshop restore_worker frequency shift"}
+DSP_TIERS = {"mask": "cleaned", "average": "recovered", "repet": "cleaned",
+             "shift": "measured"}
 FAINT_DIR = "faint"
 MAX_CLIPS = 8
+#: The linear high-frequency map is drawn when the top is above this.
+HIGH_MAP_MIN_NYQ = 14000.0
+
+#: Speech denoisers beside SpeechBrain's (§13.4). RNNoise runs inside FFmpeg
+#: (its arnndn filter) with the "somnolent-hogwash" model (speech, recording
+#: noise — GregorR/rnnoise-models, not subject to copyright); DeepFilterNet 3
+#: is its own program, deep-filter.exe, the model built in (MIT or
+#: Apache-2.0). Both fetched by get_speechbrain.bat, each against a pinned
+#: SHA-256. Both mix a little of the input back (RNNoise 10%, DeepFilterNet
+#: at most 20 dB down), so nothing is taken away completely.
+RNNOISE_TOOL = "ffmpeg arnndn (RNNoise)"
+RNNOISE_MIX = 0.9
+RNNOISE_SHA256 = ("70bb6685eb0c2a1d18e2918dca3fbfbd39317010b1802eb1b6ea73a92f3"
+                  "fdec0")
+DFN_TOOL = "deepfilternet deep-filter"
+DFN_ATTEN_DB = 20
+DFN_BUILDS = {"75e11fa16445f560cb6b021521ddb89e89270d13b83089705d98776f58fd"
+              "7915": "0.5.6 (x86_64-pc-windows-msvc)"}
+#: Every speech-only option says this — on the option, on its step, and on
+#: the page (Bill, 2026-10-09: "clearly state that IT specifically made for
+#: speech and will likely remove other audio that may or may not be
+#: important").
+SPEECH_ONLY = ("Made for speech. It removes whatever it does not judge to be "
+               "speech: footsteps, engines, doors, even a second faint voice "
+               "may go with the noise. Its residual keeps all of it. Search "
+               "for faint sounds in the original, never in this output.")
+SPEECH_ONLY_OPTIONS = ("metricgan", "sepformer-dns4", "rnnoise", "dfn")
+#: A 16 kHz model throws away everything above 8 kHz: on a recording whose
+#: speech reaches higher, its score pays for that.
+NARROW_MODEL_PENALTY = 0.2
+
+#: Shift into hearing (§13.9): a band from SHIFT_HIGH_HZ up — where most
+#: adults hear little or nothing — moved down so it starts at SHIFT_TO_HZ;
+#: below 20 Hz moved up by SHIFT_LOW_BY; a copy played EXPAND (slower) or
+#: SPEED_FACTOR times faster.
+SHIFT_HIGH_HZ = 12000.0
+SHIFT_TO_HZ = 1000.0
+SHIFT_LOW_BAND = (2.0, 20.0)
+SHIFT_LOW_BY = 300.0
+SPEED_FACTOR = 16
+MAX_SHIFT_EVENTS = 3
 #: Faint options end by lifting the quiet parts: FFmpeg's dynamic
 #: normaliser, at most +20 dB, a level operation (Measured).
 LIFT = "dynaudnorm=f=250:g=15:p=0.9:m=10"
@@ -208,7 +268,51 @@ def issues(a: dict) -> list[dict]:
         out.append(_issue("quiet", "Speech is quiet", "medium",
                           f"speech at {a['speech_db']:.0f} dBFS",
                           "level"))
+    out.extend(content_issues(a))
     out.extend(faint_issues(a))
+    return out
+
+
+CONTENT_SHORT = {"telephone": "telephone band", "codec": "a codec's cut",
+                 "upsampled": "made at a lower rate",
+                 "anti-alias": "full band", "open": "content to the very top",
+                 "rolloff": "no hard cut", "cut": "a filter's cut"}
+
+
+def content_issues(a: dict) -> list[dict]:
+    """What the file really holds (§13.9): the highest real content against
+    the top the rate allows, and the bottom — measured, for information."""
+    c = a.get("content") or {}
+    out = []
+    if c.get("kind"):
+        nyq = float(c.get("nyquist_hz") or 0)
+        top = float(c.get("cutoff_hz") or c.get("top_hz") or nyq)
+        measured = c.get("label", "")
+        if c.get("low_cut_hz"):
+            measured += (f"; at the bottom the recorder's high-pass, about "
+                         f"{c['low_cut_hz']:.0f} Hz — nothing below it")
+        if c["kind"] == "open":
+            fix = ("listen for folded ultrasound: the shift options move the "
+                   "top of the band down into hearing")
+        elif top < SHIFT_HIGH_HZ:
+            fix = (f"nothing above {top / 1000:.1f} kHz is in the file to "
+                   "recover — no shift into hearing up there")
+        elif nyq > SHIFT_HIGH_HZ + 2000:
+            fix = (f"real content up to {top / 1000:.1f} kHz: the top can be "
+                   "shifted into hearing")
+        else:
+            fix = ""
+        out.append(_issue("content", "What the file holds: "
+                          + CONTENT_SHORT.get(c["kind"], c["kind"]), "info",
+                          measured, fix, kind=c["kind"],
+                          top_hz=round(top, 1)))
+    if c.get("infrasound"):
+        out.append(_issue(
+            "infrasound", "Energy below 20 Hz", "info",
+            f"{c.get('infrasound_db', 0):+.0f} dB per hertz against 50-200 Hz"
+            " — wind, vents, traffic, machinery, a door or a pressure wave",
+            "shift it up into hearing, or play it "
+            f"{SPEED_FACTOR}x faster"))
     return out
 
 
@@ -392,6 +496,8 @@ def _effect(option: str, found: dict) -> float:
                        issue["severity"], 0.9),
                    "metricgan": 0.8 if steady else 0.6,
                    "sepformer-dns4": 0.9, "separate": 0.3,
+                   "dfn": 0.85 if steady else 0.8,
+                   "rnnoise": 0.55 if steady else 0.5,
                    "fixes-only": 0.0}.get(option, 0.0)
         elif iid == "faint":
             eff = {"faint-mask": 0.8, "faint-band": 0.6}.get(option, 0.0)
@@ -411,9 +517,136 @@ def option_tier(steps, base: str = "measured") -> str:
     return _recipe.highest_tier([s["tier"] for s in steps] + [base])
 
 
-#: Options whose purpose is the faint sounds, not the main content.
+#: Options whose purpose is the faint sounds, not the main content (and
+#: every "shift-…" option: a band moved into hearing).
 FAINT_OPTIONS = ("faint-band", "faint-mask", "average-repeats",
                  "repeating-apart")
+
+
+def is_faint_option(oid: str) -> bool:
+    return oid in FAINT_OPTIONS or oid.startswith("shift-")
+
+
+def _rnnoise_step() -> dict:
+    return {"kind": "rnnoise", "tool": RNNOISE_TOOL, "filters": [],
+            "tier": "inferred", "speech_only": True,
+            "label": "RNNoise speech denoiser (FFmpeg arnndn, 10% of the "
+                     "input kept)",
+            "why": "a small recurrent network trained on speech over "
+                   "recording noise (fans, air conditioning, computers) "
+                   "turns each band down by how much speech it hears there. "
+                   + SPEECH_ONLY}
+
+
+def _deepfilter_step() -> dict:
+    return {"kind": "deepfilter", "tool": DFN_TOOL, "tier": "inferred",
+            "speech_only": True,
+            "label": f"DeepFilterNet 3 speech enhancement (48 kHz, at most "
+                     f"{DFN_ATTEN_DB} dB taken off)",
+            "why": "a learned model of speech keeps what it judges to be "
+                   "speech, full band, its delay put back. " + SPEECH_ONLY,
+            "params": {"atten_lim_db": DFN_ATTEN_DB,
+                       "compensate_delay": True}}
+
+
+def _shift_step(lo: float, hi: float, by: float, label: str, why: str,
+                copy: dict | None = None) -> dict:
+    return _dsp_step("shift", label, why, band=[round(lo, 1), round(hi, 1)],
+                     shift_hz=round(by, 1), copy=copy or None)
+
+
+def shift_options_for(a: dict) -> list[dict]:
+    """(id, label, step, gets, copy stem) for each band worth moving into
+    hearing: up to three sounds found above SHIFT_HIGH_HZ, the strongest
+    steady tone up there, everything up there, and below 20 Hz."""
+    c = a.get("content") or {}
+    rate = float(a.get("rate") or 0)
+    nyq = rate / 2
+    if not rate:
+        return []
+    top = min(float(c.get("cutoff_hz") or nyq), 0.995 * nyq)
+    out = []
+    every = (a.get("faint") or {}).get("events") or []
+    lows = [e for e in every if e.get("f_hi", 0) < SHIFT_HIGH_HZ]
+
+    def heard_below(e) -> bool:
+        # the top of a sound that is also heard below SHIFT_HIGH_HZ at the
+        # same moment — a click, a door, a plosive — is not worth moving:
+        # the sound itself is already audible (seen 2026-10-09: a voice's
+        # clicks took every slot from a beacon that was only up there)
+        peak = e.get("peak_s", 0.5 * (e["start_s"] + e["end_s"]))
+        return any(l["start_s"] <= peak <= l["end_s"] for l in lows)
+
+    events = [e for e in every if e.get("f_lo", 0) >= SHIFT_HIGH_HZ
+              and e["f_lo"] < top and not heard_below(e)]
+    for e in sorted(events, key=lambda e: -e["z"])[:MAX_SHIFT_EVENTS]:
+        pad = max(200.0, 0.1 * (e["f_hi"] - e["f_lo"]))
+        lo = max(0.9 * SHIFT_HIGH_HZ, e["f_lo"] - pad)
+        hi = min(top, e["f_hi"] + pad)
+        by = SHIFT_TO_HZ - lo
+        step = _shift_step(
+            lo, hi, by, f"Move {lo / 1000:.1f}-{hi / 1000:.1f} kHz down by "
+            f"{-by / 1000:.1f} kHz", "every frequency in the band moved by the "
+            "same amount, so a pattern up there is heard down here at the "
+            "same moment; a copy of the event played slower beside it",
+            copy={"kind": "expand",
+                  "start_s": max(0.0, round(e["start_s"] - 1.0, 3)),
+                  "end_s": round(e["end_s"] + 1.0, 3)})
+        out.append((f"shift-ev{e['n']}",
+                    f"Hear sound {e['n']} — {e['f_lo'] / 1000:.1f}-"
+                    f"{e['f_hi'] / 1000:.1f} kHz moved down into hearing",
+                    step, [f"sound {e['n']} ({e['start_s']:.1f}-"
+                           f"{e['end_s']:.1f} s) heard at "
+                           f"{SHIFT_TO_HZ / 1000:.0f}-{(hi + by) / 1000:.1f} "
+                           "kHz, in time with the recording, and a slowed "
+                           "copy of it"], "expanded"))
+    lines = [l for l in (a.get("faint") or {}).get("lines") or []
+             if not l.get("mains") and SHIFT_HIGH_HZ <= l["hz"] < top]
+    if lines:
+        l = max(lines, key=lambda l: l["z"])
+        lo, hi = max(0.9 * SHIFT_HIGH_HZ, l["hz"] - 500.0), min(top,
+                                                              l["hz"] + 500.0)
+        by = SHIFT_TO_HZ - lo
+        step = _shift_step(lo, hi, by, f"Move the {l['hz'] / 1000:.2f} kHz "
+                           f"tone down to {(l['hz'] + by) / 1000:.2f} kHz",
+                           "the tone and 500 Hz either side moved down: what "
+                           "changes it — a beacon's data, a motor's load — "
+                           "heard as it happens; a slowed copy of its loudest "
+                           "30 s beside it", copy={"kind": "expand"})
+        out.append(("shift-line", f"Hear the {l['hz'] / 1000:.2f} kHz tone",
+                    step, [f"the steady tone at {l['hz']:.0f} Hz "
+                           f"(+{l['prominence_db']:.0f} dB) heard at "
+                           f"{(l['hz'] + by):.0f} Hz with whatever "
+                           "modulates it"], "expanded"))
+    if top >= SHIFT_HIGH_HZ + 2000.0:
+        by = SHIFT_TO_HZ - SHIFT_HIGH_HZ
+        step = _shift_step(SHIFT_HIGH_HZ, top, by,
+                           f"Move {SHIFT_HIGH_HZ / 1000:.0f}-{top / 1000:.1f} "
+                           f"kHz down by {-by / 1000:.0f} kHz",
+                           "everything the file holds above "
+                           f"{SHIFT_HIGH_HZ / 1000:.0f} kHz moved down, "
+                           "nothing chosen; a slowed copy of its loudest "
+                           "30 s beside it", copy={"kind": "expand"})
+        out.append(("shift-top", f"Hear everything above "
+                    f"{SHIFT_HIGH_HZ / 1000:.0f} kHz", step,
+                    [f"{SHIFT_HIGH_HZ / 1000:.0f}-{top / 1000:.1f} kHz heard at "
+                     f"{SHIFT_TO_HZ / 1000:.0f}-{(top + by) / 1000:.1f} kHz"],
+                    "expanded"))
+    if c.get("infrasound"):
+        lo, hi = SHIFT_LOW_BAND
+        step = _shift_step(lo, hi, SHIFT_LOW_BY,
+                           f"Move {lo:.0f}-{hi:.0f} Hz up by "
+                           f"{SHIFT_LOW_BY:.0f} Hz",
+                           "below 20 Hz moved up to where it can be heard, in "
+                           f"time with the recording; a copy {SPEED_FACTOR}x "
+                           "faster, its pattern kept",
+                           copy={"kind": "speed", "factor": SPEED_FACTOR})
+        out.append(("shift-low", "Hear below 20 Hz", step,
+                    [f"{lo:.0f}-{hi:.0f} Hz heard at {lo + SHIFT_LOW_BY:.0f}-"
+                     f"{hi + SHIFT_LOW_BY:.0f} Hz, and the whole recording "
+                     f"{SPEED_FACTOR}x faster ({lo * SPEED_FACTOR:.0f}-"
+                     f"{hi * SPEED_FACTOR:.0f} Hz)"], "sped-up"))
+    return out
 
 
 def _dsp_step(kind: str, label: str, why: str, **params) -> dict:
@@ -454,14 +687,22 @@ def options(a: dict, found: list[dict] | None = None) -> list[dict]:
     ch = a.get("channels") or {}
     base = "recovered" if ch.get("used") else "measured"
 
+    narrow = float(a.get("bandwidth_hz") or 0) > 8500.0
+
     def add(oid, label, steps, gets, risks, outputs=("output",), **extra):
         tier = option_tier(steps, base)
-        score = round(_effect(oid, f) - TIER_PENALTY[tier], 3)
+        score = _effect(oid, f) - TIER_PENALTY[tier]
+        if narrow and any(s["kind"] == "to16k" for s in steps) and \
+                oid != "separate":
+            score -= NARROW_MODEL_PENALTY
+        speech_only = oid in SPEECH_ONLY_OPTIONS
+        if speech_only:
+            risks = risks + ". " + SPEECH_ONLY
         out.append(dict({"id": oid, "label": label, "steps": steps,
                          "tier": tier, "gets": gets, "risks": risks,
-                         "outputs": list(outputs), "score": score,
-                         "recommended": False,
-                         "purpose": "faint" if oid in FAINT_OPTIONS
+                         "outputs": list(outputs), "score": round(score, 3),
+                         "recommended": False, "speech_only": speech_only,
+                         "purpose": "faint" if is_faint_option(oid)
                          else "main"}, **extra))
 
     fixed = [s["label"] for s in shared]
@@ -493,6 +734,19 @@ def options(a: dict, found: list[dict] | None = None) -> list[dict]:
                      "noise (trained on ~1,300 h of DNS-4 noise)"],
             "the most invasive: at very low SNR it can remove or blur speech; "
             "output is 16 kHz")
+        add("dfn", "Speech enhancement — DeepFilterNet 3 (full band)",
+            shared + [_deepfilter_step()] + level,
+            fixed + ["strong removal of steady and changing noise at the "
+                     "recording's own rate — nothing above 8 kHz thrown away; "
+                     "at most 20 dB taken off, so a trace of everything stays"],
+            "a learned model shapes what is kept: it can thin a voice or "
+            "swallow a quiet word")
+        add("rnnoise", "Speech denoiser — RNNoise (light)",
+            shared + [_rnnoise_step()] + level,
+            fixed + ["light, fast noise removal for fans, air conditioning "
+                     "and computers; 10% of the input kept in"],
+            "gentler than the other models and easily fooled by changing "
+            "noise; it can leave a gated, underwater sound between words")
         if shared:
             add("fixes-only", "Only the fixes, noise left in", list(shared)
                 + level, fixed + ["the faithful baseline: hum/clicks/rumble "
@@ -560,6 +814,13 @@ def options(a: dict, found: list[dict] | None = None) -> list[dict]:
                      "repeating part is the residual"],
             "a soft mask: some of the background stays, and a sound that "
             "itself repeats at that period goes with the background")
+    for oid, label, step, gets, stem in shift_options_for(a):
+        add(oid, label, [step, _lift_step()], gets,
+            "a moved band no longer sounds like itself — its pitch is "
+            "wrong by the shift, its harmonics no longer line up; it shows "
+            "WHAT happens WHEN, not what it sounded like. The lift raises "
+            "the band's own noise too. No residual: nothing was taken away",
+            copy_stem=stem, shift=True)
     add("separate", "Separate two voices — SepFormer (WHAMR!)",
         shared + [{"kind": "to16k", "tool": "ffmpeg",
                    "filters": ["aresample=16000"], "tier": "measured",
@@ -631,7 +892,8 @@ def measured_best(results: list[dict], input_analysis: dict) -> str:
     are not ranked against it."""
     scored = [(measured_score(r, input_analysis), r["option"])
               for r in results if not r.get("error")
-              and r["option"] not in ("separate", "combine") + FAINT_OPTIONS]
+              and r["option"] not in ("separate", "combine")
+              and not is_faint_option(r["option"])]
     scored = [s for s in scored if s[0] is not None]
     return max(scored)[1] if scored else ""
 
@@ -825,6 +1087,11 @@ def analyse(case, source, *, ffmpeg, python=None, worker=None, scratch,
                             best_channel=os.fspath(run_dir / "bestch.wav"))
                 writes += [run_dir / "combined.wav", run_dir / "bestch.wav"]
             clips = []
+            try:
+                info = _wav.read_info(analysis_wav)
+                seconds, rate = info.frames / max(1, info.rate), info.rate
+            except Exception:                             # noqa: BLE001
+                seconds, rate = 0.0, 0
             if faint:
                 _case.make_case_dirs(case.root, RESTORE_DIR, run_id, FAINT_DIR)
                 clips = [run_dir / FAINT_DIR / f"faint{i:02d}.wav"
@@ -833,11 +1100,10 @@ def analyse(case, source, *, ffmpeg, python=None, worker=None, scratch,
                                  "clips": [os.fspath(c) for c in clips]}
                 item["repeats"] = True
                 writes += [run_dir / "salience.png"] + clips
-            try:
-                seconds = _wav.read_info(analysis_wav).frames / max(
-                    1, _wav.read_info(analysis_wav).rate)
-            except Exception:                             # noqa: BLE001
-                seconds = 0.0
+                if rate / 2 > HIGH_MAP_MIN_NYQ:
+                    item["faint"]["png_high"] = os.fspath(
+                        run_dir / "salience_high.png")
+                    writes.append(run_dir / "salience_high.png")
             say("Measuring noise, hum, clipping, clicks, bandwidth and level"
                 + (", the channels" if n_channels > 1 else "")
                 + (", and looking for faint sounds and repeats" if faint
@@ -891,6 +1157,23 @@ def analyse(case, source, *, ffmpeg, python=None, worker=None, scratch,
                          "nothing changed"))
                 fa.setdefault("map", {})["file"] = "salience.png"
                 produced["salience.png"] = png_sha
+            high = run_dir / "salience_high.png"
+            if fa.get("map_high") is not None and high.is_file():
+                high_sha = hashing.hash_case_file(high).sha256
+                steps.append(_recipe.step(
+                    SALIENCE_TOOL, tier="measured",
+                    params={"thresholds": fa.get("thresholds"),
+                            "scales": fa.get("scales"),
+                            "frame": fa.get("frame"),
+                            "from_hz": fa["map_high"].get("f_min"),
+                            "frequency_scale": "linear"},
+                    inputs={working: produced[working]},
+                    outputs={"salience_high.png": high_sha},
+                    note="the same map from 12 kHz to the top, linear in "
+                         "frequency, where the mel map squeezes it — a "
+                         "measurement, nothing changed"))
+                fa["map_high"]["file"] = "salience_high.png"
+                produced["salience_high.png"] = high_sha
             for clip in fa.get("clips") or []:
                 path = run_dir / FAINT_DIR / clip["file"]
                 if not path.is_file():
@@ -986,17 +1269,19 @@ def load_run(case, run_id: str) -> dict:
     fa = (data.get("analysis") or {}).get("faint") or {}
     for clip in fa.get("clips") or []:
         clip["path"] = os.fspath(folder / clip["file"])
-    if (fa.get("map") or {}).get("file"):
-        fa["map"]["path"] = os.fspath(folder / fa["map"]["file"])
+    for key in ("map", "map_high"):
+        if (fa.get(key) or {}).get("file"):
+            fa[key]["path"] = os.fspath(folder / fa[key]["file"])
     return dict(data, folder=os.fspath(folder))
 
 
 def faint_files(report: dict) -> set[str]:
-    """The faint-sound files of an analysis: its clips and its map."""
+    """The faint-sound files of an analysis: its clips and its maps."""
     fa = (report.get("analysis") or {}).get("faint") or {}
     out = {c["file"] for c in fa.get("clips") or [] if c.get("file")}
-    if (fa.get("map") or {}).get("file"):
-        out.add(fa["map"]["file"])
+    for key in ("map", "map_high"):
+        if (fa.get(key) or {}).get("file"):
+            out.add(fa[key]["file"])
     return out
 
 
@@ -1048,10 +1333,13 @@ def _choose(report: dict, which) -> list[dict]:
 
 def run(case, run_id: str, which="best", *, ffmpeg, models_root, python=None,
         worker=None, scratch, device: str = "auto", force: bool = False,
-        progress=None, heartbeat=None, should_cancel=None) -> dict:
+        deepfilter=None, rnnoise_model=None, progress=None, heartbeat=None,
+        should_cancel=None) -> dict:
     """Run restoration options from an analysis: "best", "all", or a list
     of option ids. Each lands in its own folder with its residual and a
-    sidecar; a failing option is recorded and the others still run."""
+    sidecar; a failing option is recorded and the others still run.
+    `deepfilter`: deep-filter.exe (or an argv prefix, as the suite drives
+    a fake); `rnnoise_model`: the RNNoise model file (sh.rnnn)."""
     say = progress or (lambda _l: None)
     report = load_run(case, run_id)
     run_dir = Path(report["folder"])
@@ -1088,7 +1376,8 @@ def run(case, run_id: str, which="best", *, ffmpeg, models_root, python=None,
                 upstream_tier, report, ffmpeg=ffmpeg, models_root=models_root,
                 python=python, worker=worker, scratch=scratch, device=device,
                 force=force, say=say, heartbeat=heartbeat,
-                should_cancel=should_cancel))
+                should_cancel=should_cancel, deepfilter=deepfilter,
+                rnnoise_model=rnnoise_model))
         except Cancelled:
             raise
         except Exception as exc:                          # noqa: BLE001
@@ -1124,14 +1413,109 @@ def _cancelled(should_cancel) -> bool:
     return bool(should_cancel is not None and should_cancel())
 
 
+def _file_sha(path) -> str:
+    """SHA-256 of a tool's own file (a model, an executable) outside the
+    case — read only."""
+    with open(path, "rb") as fh:
+        return hashing.hash_stream(fh)[0].sha256
+
+
+def arnndn_filter(model) -> str:
+    """FFmpeg's arnndn with the model at `model`, quoted for the filter
+    graph: forward slashes, the drive colon escaped, the whole value in
+    single quotes (spaces, commas and brackets are safe inside them; a
+    single quote is not, and such a path is refused)."""
+    if not model:
+        raise MediaError("The RNNoise model was not given. " + INSTALL_HINT)
+    path = Path(model)
+    if not path.is_file():
+        raise MediaError(f"The RNNoise model is not at {path}. "
+                         + INSTALL_HINT)
+    text = os.fspath(path).replace("\\", "/")
+    if "'" in text:
+        raise MediaError(f"The RNNoise model's path holds a quote, which "
+                         f"FFmpeg's filter syntax cannot carry: {text}")
+    text = text.replace(":", "\\:")
+    return f"arnndn=m='{text}':mix={RNNOISE_MIX:g}"
+
+
+def deepfilter_argv(deepfilter) -> list[str]:
+    if isinstance(deepfilter, (list, tuple)) and deepfilter:
+        return [os.fspath(a) for a in deepfilter]
+    if not deepfilter or not Path(deepfilter).is_file():
+        raise MediaError(f"DeepFilterNet's deep-filter.exe is not at "
+                         f"{deepfilter or '(not given)'}. " + INSTALL_HINT)
+    return [os.fspath(deepfilter)]
+
+
+def _deepfilter(case, run_dir: Path, folder_name: str, rel: Path, n: int,
+                s: dict, current, current_rel: str, current_sha: str,
+                recipe: dict, chain: list, deepfilter, *, log, scratch,
+                duration: float, say, label: str, heartbeat,
+                should_cancel) -> tuple:
+    """DeepFilterNet 3 over `current`: deep-filter.exe as its own process,
+    told to write one file into a fresh folder of the option (it names its
+    output after its input), declared before it starts like every child's
+    writes. It works at 48 kHz and writes 16-bit PCM at the input's rate,
+    its delay put back (-D). (path, relative path, sha256) of its output."""
+    argv = deepfilter_argv(deepfilter)
+    exe_sha = _file_sha(argv[-1])
+    out_dir = _case.make_case_dirs(case.root, RESTORE_DIR, run_dir.name,
+                                   folder_name, f"dfn{n}")
+    produced = out_dir / Path(current).name
+    args = ["-a", str(DFN_ATTEN_DB), "-D", "-o", os.fspath(out_dir)]
+    say(f"{label}: {s['label']} (on the CPU)…")
+    log_path = getattr(log, "name", None)
+
+    def beat(elapsed):
+        if heartbeat is not None:
+            heartbeat(f"DeepFilterNet: running {_sam.clock(elapsed)} · "
+                      f"{_sam.last_line(log_path) or 'nothing printed yet'}")
+
+    outcome = _sam.run_process(
+        argv + args + [os.fspath(current)], log=log,
+        timeout_s=1800.0 + 3.0 * duration, writes=[produced],
+        guard=lambda p: blocker.assert_case_path(case.root, p),
+        should_cancel=should_cancel,
+        env=_sam.child_env(_vp.make_scratch(scratch)),
+        heartbeat=beat if heartbeat else None)
+    if outcome["state"] == "cancelled":
+        raise Cancelled("stopped while DeepFilterNet ran")
+    if outcome["state"] != "completed" or not produced.is_file():
+        why = {"timeout": "it ran past its time"}.get(
+            outcome["state"], _sam.exit_sentence(outcome["returncode"]))
+        raise MediaError(f"DeepFilterNet did not finish ({why}): "
+                         f"{_sam.log_tail(log_path) or outcome.get('error')}"
+                         f" — log {log_path}.")
+    sha = hashing.hash_case_file(produced).sha256
+    out_rel = (rel / out_dir.name / produced.name).as_posix()
+    recipe["steps"].append(_recipe.step(
+        DFN_TOOL, tier="inferred",
+        version=DFN_BUILDS.get(exe_sha, "unrecorded build"),
+        params=dict(s.get("params") or {}, args=args[:3],
+                    label=s["label"]),
+        model={"name": "DeepFilterNet3 (built into deep-filter)",
+               "repo": "Rikorose/DeepFilterNet",
+               "licence": "MIT OR Apache-2.0", "exe_sha256": exe_sha},
+        inputs={current_rel: current_sha}, outputs={out_rel: sha},
+        note=s["why"]))
+    chain.append(len(recipe["steps"]) - 1)
+    return produced, out_rel, sha
+
+
 def _run_option(case, run_dir: Path, recipe: dict, opt: dict, working,
                 w_sha: str, upstream_tier: str, report: dict, *, ffmpeg,
                 models_root, python, worker, scratch, device, force, say,
-                heartbeat, should_cancel) -> dict:
+                heartbeat, should_cancel, deepfilter=None,
+                rnnoise_model=None) -> dict:
     """One option: its chain from the working copy (analysis.wav, or the
-    combined channels), aligned to and subtracted from its reference."""
+    combined channels), aligned to and subtracted from its reference — or,
+    for a band moved into hearing, cut to its length with no residual."""
     working_rel = Path(working).name
     duration = float(report["analysis"].get("duration_s", 0.0) or 0.0)
+    work_rate = int(report["analysis"].get("rate") or 0) or None
+    moved = bool(opt.get("shift"))
+    copy = None
     folder_name = f"opt-{opt['id']}"
     if force and (run_dir / folder_name).exists():
         folder_name = f"opt-{opt['id']}-{_vp._new_id('x')[2:]}"
@@ -1146,24 +1530,44 @@ def _run_option(case, run_dir: Path, recipe: dict, opt: dict, working,
         outputs = []
         n = 0
 
+        def filters_of(s):
+            return [arnndn_filter(rnnoise_model)] if s["kind"] == "rnnoise" \
+                else s["filters"]
+
         def flush_filters():
             nonlocal current, current_rel, current_sha, n
             if not pending:
                 return
             n += 1
             out = folder / f"step{n}.wav"
-            filters = [f for s in pending for f in s["filters"]]
+            filters = [f for s in pending for f in filters_of(s)]
             to16 = any(s["kind"] == "to16k" for s in pending)
+            # arnndn works at 48 kHz (FFmpeg converts into it); its output
+            # goes back to the recording's own rate
+            back = any(s["kind"] == "rnnoise" for s in pending)
             _ffmpeg(ffmpeg, [current], out,
                     filters=[f for f in filters if not f.startswith(
-                        "aresample")], rate=16000 if to16 else None,
+                        "aresample")],
+                    rate=16000 if to16 else work_rate if back else None,
                     log=log, case=case, should_cancel=should_cancel)
             sha = hashing.hash_case_file(out).sha256
             for s in pending:
+                model = {}
+                if s["kind"] == "rnnoise":
+                    msha = _file_sha(rnnoise_model)
+                    model = {"file": Path(rnnoise_model).name,
+                             "sha256": msha,
+                             "pinned": msha == RNNOISE_SHA256,
+                             "source": "GregorR/rnnoise-models "
+                                       "somnolent-hogwash-2018-09-01",
+                             "licence": "not subject to copyright "
+                                        "(rnnoise-models README)"}
                 recipe["steps"].append(_recipe.step(
-                    "ffmpeg", tier=s["tier"], version=_tool_version(ffmpeg),
-                    params={"filters": s["filters"], "label": s["label"]},
-                    inputs={current_rel: current_sha},
+                    s.get("tool", "ffmpeg"), tier=s["tier"],
+                    version=_tool_version(ffmpeg),
+                    params={"filters": filters_of(s), "label": s["label"]}
+                    | ({"rate": work_rate} if s["kind"] == "rnnoise" else {}),
+                    model=model, inputs={current_rel: current_sha},
                     outputs={(rel / out.name).as_posix(): sha},
                     note=s["why"]))
                 chain.append(len(recipe["steps"]) - 1)
@@ -1210,28 +1614,51 @@ def _run_option(case, run_dir: Path, recipe: dict, opt: dict, working,
                 model_outputs = names
                 report.setdefault("devices", {})[opt["id"]] = \
                     data.get("device", "")
+            elif s["kind"] == "deepfilter":
+                flush_filters()
+                n += 1
+                current, current_rel, current_sha = _deepfilter(
+                    case, run_dir, folder_name, rel, n, s, current,
+                    current_rel, current_sha, recipe, chain, deepfilter,
+                    log=log, scratch=scratch, duration=duration, say=say,
+                    label=opt["label"], heartbeat=heartbeat,
+                    should_cancel=should_cancel)
             elif s["kind"].startswith("dsp:"):
                 flush_filters()
                 n += 1
                 out = folder / f"step{n}.wav"
+                writes = [out]
+                params = dict(s.get("params") or {})
+                if params.get("copy"):
+                    copy_path = folder / f"step{n}.copy.wav"
+                    params["copy"] = dict(params["copy"],
+                                          output=os.fspath(copy_path))
+                    writes.append(copy_path)
                 say(f"{opt['label']}: {s['label']}…")
                 data = _call_worker(
                     dict({"op": "dsp", "dsp": s["dsp"],
                           "input": os.fspath(current),
-                          "output": os.fspath(out)}, **(s.get("params") or {})),
+                          "output": os.fspath(out)}, **params),
                     folder, f"dsp{n}", case=case, python=python, worker=worker,
-                    scratch=scratch, log=log, writes=[out],
+                    scratch=scratch, log=log, writes=writes,
                     should_cancel=should_cancel, heartbeat=heartbeat,
                     timeout_s=900.0 + 3.0 * duration)
                 sha = hashing.hash_case_file(out).sha256
+                outs = {(rel / out.name).as_posix(): sha}
+                if len(writes) > 1 and writes[1].is_file():
+                    copy = {"path": writes[1],
+                            "sha256": hashing.hash_case_file(writes[1]).sha256,
+                            "info": (data.get("info") or {}).get("copy") or {}}
+                    outs[(rel / writes[1].name).as_posix()] = copy["sha256"]
                 recipe["steps"].append(_recipe.step(
                     s["tool"], tier=s["tier"],
                     params=dict(s.get("params") or {}, label=s["label"],
                                 measured=data.get("info") or {}),
                     inputs={current_rel: current_sha},
-                    outputs={(rel / out.name).as_posix(): sha},
-                    note=s["why"]))
+                    outputs=outs, note=s["why"]))
                 chain.append(len(recipe["steps"]) - 1)
+                if copy is not None and "chain" not in copy:
+                    copy["chain"] = list(chain)
                 current, current_rel, current_sha = \
                     out, (rel / out.name).as_posix(), sha
             else:
@@ -1269,25 +1696,31 @@ def _run_option(case, run_dir: Path, recipe: dict, opt: dict, working,
                 note="resampled only"))
             ref_chain = [len(recipe["steps"]) - 1]
         residual_name = _recipe.output_name("residual", tier)
-        residual = folder / residual_name
+        # a band moved in frequency is not aligned (it no longer correlates
+        # with where it came from — the shift keeps time on its own) and has
+        # no residual: the input less a moved band is not what was taken
+        residual = None if moved else folder / residual_name
         aligned = [folder / f"{stem}.aligned.wav" for stem, _p, _s in finals]
-        say(f"{opt['label']}: aligning to the input and measuring what "
-            "changed…")
+        say(f"{opt['label']}: " + ("cutting to the input's length…" if moved
+                                   else "aligning to the input and measuring "
+                                   "what changed…"))
         finished = _call_worker(
             {"op": "finish", "reference": os.fspath(reference),
              "outputs": [os.fspath(p) for _st, p, _sh in finals],
              "aligned": [os.fspath(p) for p in aligned],
-             "residual": os.fspath(residual)},
+             "residual": os.fspath(residual) if residual else None,
+             "align": not moved},
             folder, "finish", case=case, python=python, worker=worker,
-            scratch=scratch, log=log, writes=aligned + [residual],
+            scratch=scratch, log=log,
+            writes=aligned + ([residual] if residual else []),
             should_cancel=should_cancel, heartbeat=heartbeat,
             timeout_s=900.0 + 2.0 * duration)
         lags = list(finished.get("lags") or [0] * len(finals))
         rate_out = finished.get("rate") or 0
         align_steps = []
         for (stem, src, src_sha), dst, lag in zip(finals, aligned, lags):
-            src_rel = working_rel if src == working else \
-                (rel / src.name).as_posix()
+            src_rel = current_rel if src == current else \
+                working_rel if src == working else (rel / src.name).as_posix()
             recipe["steps"].append(_recipe.step(
                 ALIGN_TOOL, tier="measured",
                 params={"lag_samples": int(lag), "rate": rate_out,
@@ -1296,7 +1729,9 @@ def _run_option(case, run_dir: Path, recipe: dict, opt: dict, working,
                 inputs={src_rel: src_sha, ref_rel: ""},
                 outputs={(rel / dst.name).as_posix():
                          hashing.hash_case_file(dst).sha256},
-                note="shifted back by the measured lag and cut to the input's "
+                note="cut to the input's length — a moved band keeps time "
+                     "by itself" if moved else
+                     "shifted back by the measured lag and cut to the input's "
                      "length, so the restored file lines up with the original"))
             align_steps.append(len(recipe["steps"]) - 1)
         for (stem, _src, _sh), dst, a_step in zip(finals, aligned, align_steps):
@@ -1317,8 +1752,32 @@ def _run_option(case, run_dir: Path, recipe: dict, opt: dict, working,
                 note=level[0]["why"] if level else "no change to the samples"))
             outputs.append((stem, dest, sha,
                             chain + [a_step, len(recipe["steps"]) - 1], dst))
+        if copy is not None and opt.get("copy_stem"):
+            # the slowed (or sped-up) copy, under its labelled name, at its
+            # own rate — the same samples, nothing else done to them
+            name = _recipe.output_name(opt["copy_stem"], tier)
+            dest = folder / name
+            _ffmpeg(ffmpeg, [copy["path"]], dest, filters=["anull"], log=log,
+                    case=case, should_cancel=should_cancel)
+            sha = hashing.hash_case_file(dest).sha256
+            info = copy.get("info") or {}
+            recipe["steps"].append(_recipe.step(
+                "ffmpeg", tier="measured", version=_tool_version(ffmpeg),
+                params={"filters": ["anull"],
+                        "label": "Copied to its labelled name"},
+                inputs={(rel / copy["path"].name).as_posix(): copy["sha256"]},
+                outputs={(rel / name).as_posix(): sha},
+                note=("the band played {f:g}x {how}, heard at {lo:.0f}-{hi:.0f}"
+                      " Hz").format(f=info.get("factor") or 0,
+                                    how="slower" if info.get("kind") ==
+                                    "expand" else "faster",
+                                    lo=(info.get("heard_hz") or [0, 0])[0],
+                                    hi=(info.get("heard_hz") or [0, 0])[1])))
+            outputs.append((opt["copy_stem"], dest, sha,
+                            copy["chain"] + [len(recipe["steps"]) - 1],
+                            copy["path"]))
         residual_chain = chain + ref_chain + align_steps
-        res_sha = hashing.hash_case_file(residual).sha256
+        res_sha = hashing.hash_case_file(residual).sha256 if residual else ""
     entries = []
     for stem, path, sha, own, _src in outputs:
         entry = {"file": (rel / path.name).as_posix(), "sha256": sha,
@@ -1330,18 +1789,21 @@ def _run_option(case, run_dir: Path, recipe: dict, opt: dict, working,
         _write_sidecar(case, path, entry, recipe, upstream_tier)
         entries.append({"stem": stem, "file": entry["file"], "sha256": sha,
                         "tier": tier})
-    res_entry = {"file": (rel / residual_name).as_posix(),
-                 "sha256": res_sha, "stem": "residual", "seed": None,
-                 "tier": tier, "chain": residual_chain,
-                 "size": os.path.getsize(residual),
-                 "sidecar": _recipe.sidecar_path(residual_name).name,
-                 "log": (rel / "restore.log").as_posix()}
-    recipe["outputs"].append(res_entry)
-    _write_sidecar(case, residual, res_entry, recipe, upstream_tier)
+    res_entry = None
+    if residual is not None:
+        res_entry = {"file": (rel / residual_name).as_posix(),
+                     "sha256": res_sha, "stem": "residual", "seed": None,
+                     "tier": tier, "chain": residual_chain,
+                     "size": os.path.getsize(residual),
+                     "sidecar": _recipe.sidecar_path(residual_name).name,
+                     "log": (rel / "restore.log").as_posix()}
+        recipe["outputs"].append(res_entry)
+        _write_sidecar(case, residual, res_entry, recipe, upstream_tier)
     change = finished.get("change") or {}
     result = {"option": opt["id"], "label": opt["label"], "tier": tier,
               "outputs": entries,
-              "residual": {"file": res_entry["file"], "sha256": res_sha},
+              "residual": {"file": res_entry["file"], "sha256": res_sha}
+              if res_entry else None,
               "measured": {"removed": {k: change.get(k) for k in
                                        ("during_speech_db",
                                         "during_pauses_db")},
@@ -1353,10 +1815,14 @@ def _run_option(case, run_dir: Path, recipe: dict, opt: dict, working,
                            "outputs": finished.get("outputs") or []},
               "device": (report.get("devices") or {}).get(opt["id"], ""),
               "error": ""}
+    if copy is not None and copy.get("info"):
+        result["copy"] = dict(copy["info"], stem=opt.get("copy_stem", ""))
+    if opt.get("speech_only"):
+        result["speech_only"] = True
     case.custody.record(
         "media.restore.derived", actor=case.actor(), target=run_dir.name,
-        hashes={e["file"]: e["sha256"] for e in entries} | {
-            res_entry["file"]: res_sha},
+        hashes={e["file"]: e["sha256"] for e in entries} | (
+            {res_entry["file"]: res_sha} if res_entry else {}),
         detail={"run_id": run_dir.name, "option": opt["id"], "tier": tier,
                 "steps": [recipe["steps"][i]["tool"] for i in chain],
                 "outputs": [e["file"] for e in entries],
@@ -1416,7 +1882,9 @@ def export(case, run_id: str, file: str) -> dict:
 
 def capability_note() -> str:
     return ("Restoration analyses with restore_worker.py (torch) and runs "
-            "FFmpeg filters and SpeechBrain models; every output keeps its "
-            "tier, residual and recipe. Faint sounds: channels combined, a "
-            "salience map with a clip per faint event, tonal lines, repeats "
-            "averaged or lifted off.")
+            "FFmpeg filters, SpeechBrain models, DeepFilterNet and RNNoise "
+            "(speech only, marked so); every output keeps its tier, residual "
+            "and recipe. Faint sounds: channels combined, a salience map "
+            "(and a linear one above 12 kHz) with a clip per faint event, "
+            "tonal lines, repeats averaged or lifted off. What the file "
+            "really holds, and bands out of hearing moved into it.")
