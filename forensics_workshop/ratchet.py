@@ -107,7 +107,9 @@ REQUIRED_GUARDS = {"case": "assert_case_path",
                    "harness": "assert_harness_path",
                    "spawn": "assert_child_writes",
                    "runtime-scratch": "assert_runtime_scratch",
-                   "calibration": "assert_calibration_path"}
+                   "calibration": "assert_calibration_path",
+                   "acquisition": "assert_acquisition_path",
+                   "device-query": "assert_query_only"}
 
 #: opener -> (index of the mode argument, default mode)
 OPENERS = {

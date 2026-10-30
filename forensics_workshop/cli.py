@@ -48,6 +48,10 @@
     python -m forensics_workshop restore-run     CASE RUN_ID --examiner NAME --ffmpeg EXE --python EXE --scratch DIR --models-root DIR [--option ID]... [--all] [--force] [--device auto] [--deepfilter EXE] [--rnnoise-model FILE]
     python -m forensics_workshop restore-list    CASE --examiner NAME [--id RUN_ID]
     python -m forensics_workshop restore-export  CASE RUN_ID FILE --examiner NAME
+  drive acquisition (2026-10-29) — image a drive to E01 or RAW, verified
+    python -m forensics_workshop drives
+    python -m forensics_workshop corpus      CASE E001 --examiner NAME [--families image,video,document,text,email] [--deleted] [--path TEXT]
+    python -m forensics_workshop acquire     SOURCE DEST --name NAME --examiner NAME [--case CASE] [--format e01|raw] [--compression fast|best|none] [--segment-mb 2000|0] [--case-number TEXT] [--evidence-number TEXT] [--description TEXT] [--notes TEXT] [--write-blocker TEXT] [--no-verify] [--retries 2] [--plan-only]
     python -m forensics_workshop volume      PATH
     python -m forensics_workshop usb-policy  status | on | off
     python -m forensics_workshop probe-write FOLDER --i-confirm-this-is-not-evidence
@@ -70,6 +74,8 @@ import sys
 
 from . import __version__, blocker, capabilities as caps
 from . import carve as _carve
+from . import acquire as _acquire
+from . import corpus as _corpus
 from . import diskimage as _disk
 from . import domex as _domex
 from . import hunts as _hunts
@@ -512,6 +518,60 @@ def cmd_voice_profiles(args) -> int:
     return 0
 
 
+def cmd_corpus(args) -> int:
+    fams = [f.strip() for f in args.families.split(",") if f.strip()] \
+        or list(_corpus.HUNT_FAMILIES)
+    items = _corpus.list_items(_open(args), args.evidence, families=fams,
+                               include_deleted=args.deleted,
+                               path_filter=args.path, limit=args.limit or None)
+    for i in items:
+        print(f"{i.family:9} {i.size:>12,}  {'DELETED ' if i.deleted else ''}"
+              f"{i.path}  [{i.basis}]")
+    print(f"\n{len(items)} item(s) a model hunt would look at")
+    return 0
+
+
+def cmd_drives(args) -> int:
+    drives = _acquire.list_drives()
+    for d in drives:
+        print(d.label())
+        extra = [f"model {d.model}" if d.model else "",
+                 f"serial {d.serial}" if d.serial else "",
+                 f"{d.sector_size}-byte sectors",
+                 "removable" if d.removable else ""]
+        print("    " + " · ".join(e for e in extra if e))
+    if not drives:
+        print("No drives could be listed here." + (
+            "" if _acquire.is_elevated() else
+            " (Some systems list drives only to an administrator.)"))
+    if _acquire.is_windows() and not _acquire.is_elevated():
+        print("\n" + _acquire.ELEVATION_SENTENCE)
+    return 0
+
+
+def cmd_acquire(args) -> int:
+    case = (Case.open(args.case, examiner=args.examiner) if args.case
+            else None)
+    segment = int(args.segment_mb) * (1 << 20) if args.segment_mb else None
+    plan = _acquire.check_plan(args.source, args.dest, args.name,
+                               fmt=args.format, compression=args.compression,
+                               segment_bytes=segment, case=case)
+    if args.plan_only or not plan.ok:
+        _print(plan.as_dict())
+        return 0 if plan.ok else 2
+    for warning in plan.warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
+    result = _acquire.acquire(
+        args.source, args.dest, args.name, examiner=args.examiner,
+        fmt=args.format, compression=args.compression, segment_bytes=segment,
+        case=case, case_number=args.case_number,
+        evidence_number=args.evidence_number, description=args.description,
+        notes=args.notes, write_blocker=args.write_blocker,
+        verify=not args.no_verify, retries=args.retries, progress=_progress)
+    _print(result.as_dict())
+    return 0 if result.verified is not False else 1
+
+
 def _print_voice(result: dict) -> None:
     shown = {k: v for k, v in result.items() if k != "embedding"}
     _print(shown)
@@ -923,6 +983,44 @@ def build_parser() -> argparse.ArgumentParser:
                    "copy one restoration output into the case's exports")
     rx.add_argument("run_id")
     rx.add_argument("file")
+
+    cp = with_case("corpus", cmd_corpus, "what a model hunt would look at: "
+                   "images, video, documents, text, email", evidence=True)
+    cp.add_argument("--families", default="",
+                    help=f"comma-separated, from: {', '.join(_corpus.HUNT_FAMILIES)}")
+    cp.add_argument("--deleted", action="store_true",
+                    help="include deleted NTFS entries")
+    cp.add_argument("--path", default="", help="part of a path")
+    cp.add_argument("--limit", type=int, default=0)
+    sub.add_parser("drives", help="the drives this machine shows (read-only "
+                   "queries)").set_defaults(fn=cmd_drives)
+    aq = sub.add_parser("acquire", help="image a drive to E01 or RAW, "
+                        "hashed in one read and verified")
+    aq.add_argument("source", help=r"\\.\PhysicalDrive1, PhysicalDrive1, E: "
+                    "(one volume), or /dev/sdb")
+    aq.add_argument("dest", help="an EMPTY folder on another drive, outside "
+                    "every case")
+    aq.add_argument("--name", required=True, help="the image's base name")
+    aq.add_argument("--examiner", required=True)
+    aq.add_argument("--case", default="",
+                    help="record custody in this case and register the image")
+    aq.add_argument("--format", default="e01", choices=list(_acquire.FORMATS))
+    aq.add_argument("--compression", default="fast",
+                    choices=list(_acquire.COMPRESSIONS))
+    aq.add_argument("--segment-mb", type=int,
+                    default=_acquire.DEFAULT_SEGMENT >> 20,
+                    help="segment size in MiB; 0 for one file")
+    aq.add_argument("--case-number", default="")
+    aq.add_argument("--evidence-number", default="")
+    aq.add_argument("--description", default="")
+    aq.add_argument("--notes", default="")
+    aq.add_argument("--write-blocker", default="",
+                    help="the hardware write blocker used, in your words")
+    aq.add_argument("--no-verify", action="store_true")
+    aq.add_argument("--retries", type=int, default=_acquire.DEFAULT_RETRIES)
+    aq.add_argument("--plan-only", action="store_true",
+                    help="check everything and say what would happen")
+    aq.set_defaults(fn=cmd_acquire)
 
     vol = sub.add_parser("volume", help="is this volume read-only?")
     vol.add_argument("path")

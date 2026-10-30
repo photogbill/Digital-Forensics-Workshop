@@ -90,6 +90,13 @@ NOATIME_FLAG = getattr(os, "O_NOATIME", 0)
 #:   calibration the voice model's `voiceprint_calibration.json`, in the
 #:               model's own folder and never in a case — asserted with
 #:               `media.voiceprint.assert_calibration_path`
+#:   acquisition  an image and its log, written by the drive imager into
+#:               the destination folder the examiner chose — never inside a
+#:               case, never on the drive being imaged — asserted with
+#:               `acquire.assert_acquisition_path`
+#:   device-query  a Windows drive query (CreateFileW + DeviceIoControl),
+#:               allowed no access but none-or-read and no control code but
+#:               the read-only ones — asserted with `acquire.assert_query_only`
 #:   worker-output  what a worker process writes (`media/vp_worker.py`,
 #:               `media/restore_worker.py` — run as their own processes,
 #:               never imported): every path is put through the case or
@@ -113,6 +120,14 @@ WRITERS = {
     "artefacts.mobile:_open_working_copy": "case",
     "artefacts.mobile:_write_file_map": "case",
     "review:_append": "case",
+    "report:_write_case_file": "case",
+    # drive acquisition (acquire.py, 2026-10-29): every write goes into the
+    # destination the examiner chose, never a case, never the source's disk;
+    # the drive queries are read-only control codes and nothing else.
+    "acquire:_make_destination": "acquisition",
+    "acquire:_open_output": "acquisition",
+    "acquire:_write_log": "acquisition",
+    "acquire:_win_query": "device-query",
     # media recovery (FORENSICS_PLAN §12-13): run logs go into the case;
     # validation runs into a harness folder. FFmpeg and the workers write
     # their own files as CHILD PROCESSES, into folders made inside the case.

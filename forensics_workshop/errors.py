@@ -72,3 +72,10 @@ class MediaError(ForensicsError):
     pinned one are refused with this, too: the wrong weights are not a
     crash, they are a reason not to run.
     """
+
+
+class AcquisitionError(ForensicsError):
+    """A drive acquisition (`acquire.py`) was refused or failed — with the
+    sentence saying why: the destination is on the drive being imaged, the
+    destination is not empty, Windows needs Administrator, the image did not
+    verify."""

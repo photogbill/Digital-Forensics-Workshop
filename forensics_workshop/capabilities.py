@@ -180,6 +180,17 @@ _TABLE = (
     ("readonly", "Read-only evidence access and its ratchet", 1, "native",
      "forensics_workshop.blocker", "", "", "planned",
      "Structural: no write reaches evidence. NOT a hardware write blocker."),
+    ("acquisition", "Drive imaging — a physical drive or one volume to E01 "
+     "or RAW (FTK Imager's job)", 1, "native", "forensics_workshop.acquire",
+     "", "", "planned",
+     "Built 2026-10-29: read once through the read-only door; MD5, SHA-1 and "
+     "SHA-256 in that read; E01 (fast/best/none compression) or RAW, one file "
+     "or split; unreadable sectors retried, zero-filled and listed (log, "
+     "custody, E01 error2); the image read back and hashed again; custody "
+     "and registration in the open case. Refuses a destination on the source "
+     "drive, inside a case, or not empty. Windows needs Administrator. The "
+     "E01s are checked against libewf (ewfverify) in the suite where it is "
+     "installed. NOT a hardware write blocker; not yet run on a Windows drive."),
     ("usb-policy", "USB WriteProtect policy, with verification", 1, "native",
      "forensics_workshop.blocker", "", "", "planned",
      "Windows only, needs elevation, USB mass storage only; verified by an "
@@ -270,7 +281,7 @@ _TABLE = (
      "This is the queue the hunts and the graph file into."),
     ("transcripts", "Audio and video through Whisper", 3, "atk", "", "", "",
      "planned", "Tagged by task, not detected language."),
-    ("hunts", "Hunts over the parsed rows — deterministic now, LLM next", 3,
+    ("hunts", "Hunts — deterministic over the parsed rows; the model's in ATK", 3,
      "native", "forensics_workshop.hunts", "", "", "planned",
      "Built native (the §10.2 backbone): selectors (email, IPv4, Bitcoin, "
      "Ethereum, Luhn-checked cards, heuristic phone), keyword and watchlist "
@@ -278,9 +289,12 @@ _TABLE = (
      "high-value triage (geotagged photos + document/email counts). Every hit "
      "is filed into the review queue as a PROPOSAL citing the exact rows; "
      "re-runs are idempotent and never resurrect a rejected lead. No model — "
-     "reproducible. The LLM layer (topic/threat classification, thread "
-     "summaries, triage ranking) builds on this and proposes into the same "
-     "queue; still to come."),
+     "reproducible. The model layer is BUILT in ATK (2026-10-29, "
+     "atk/core/dfw_ai.py over corpus.py): pictures, 30 frames per video, "
+     "text with verbatim quotes checked against the text, translation with "
+     "its reasoning — every result a proposal in the same queue, "
+     "attributed model:<file>. Still to come: triage ranking, playbooks, "
+     "the contact graph."),
     ("mobile-analysis",
      "Mobile image analysis — iOS backup (messages, calls, contacts, Safari)",
      3, "native", "forensics_workshop.artefacts.mobile", "", "", "planned",

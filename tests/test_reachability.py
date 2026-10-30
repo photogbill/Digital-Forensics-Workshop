@@ -39,6 +39,9 @@ BY_DESIGN = {
     "review:confirmed":
         "the admitted-findings view the report and contact graph will read; "
         "neither surface is built yet (FORENSICS_PLAN §10)",
+    "corpus:read_item":
+        "ATK's model hunts read an item's bytes into memory; the command "
+        "line has no model to hand them to (corpus lists what they would read)",
     "media.wav:check_stem":
         "a tested building block for checking a model's output file; its "
         "caller (SAM's seed comparison) was removed 2026-10-29 and the "

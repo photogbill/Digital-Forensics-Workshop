@@ -4,18 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forensics_workshop"
-version = "0.2.0"
+version = "0.3.0"
 description = "Digital Forensics Workshop — the evidence-handling engine behind ATK's forensics workspace. Offline, standard library only."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "William R. Duncan" }]
 dependencies = []
-
-[project.optional-dependencies]
-# The finer seed-disagreement measure (FORENSICS_PLAN §12.11). Everything
-# else in forensics_workshop.media runs in a bare interpreter without it.
-media = ["numpy"]
 
 [tool.setuptools.packages.find]
 include = ["forensics_workshop*"]

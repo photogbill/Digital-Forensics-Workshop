@@ -48,10 +48,12 @@ so a misunderstanding shared by this writer and this reader is caught.
 
 from __future__ import annotations
 
+import os
 import struct
 import time
 import uuid
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 SIGNATURE = b"EVF\x09\x0d\x0a\xff\x00"
@@ -87,16 +89,22 @@ def descriptor(kind: str, offset: int, data_len: int, *,
     return head + struct.pack("<I", adler32(head))
 
 
+#: E01…E99 (99), then EAA…ZZZ (22 x 26 x 26) — libewf's and EnCase's limit.
+MAX_SEGMENTS = 99 + 22 * 26 * 26
+
+
 def segment_suffix(number: int) -> str:
-    """E01 … E99, then EAA … EZZ — EnCase's scheme (`image._ewf_next`)."""
+    """E01 … E99, then EAA … EZZ, then FAA … ZZZ — EnCase's scheme
+    (`image._ewf_next_suffix` reads it back)."""
     if number < 1:
         raise ValueError("segments are numbered from 1")
     if number <= 99:
         return f"E{number:02d}"
     n = number - 100
-    if n >= 26 * 26:
-        raise ValueError("more segments than EWF can name (E01-EZZ)")
-    return "E" + chr(65 + n // 26) + chr(65 + n % 26)
+    if number > MAX_SEGMENTS:
+        raise ValueError(f"more than {MAX_SEGMENTS:,} segments — more than "
+                         "EWF can name (E01-ZZZ); use bigger segments")
+    return chr(69 + n // 676) + chr(65 + (n // 26) % 26) + chr(65 + n % 26)
 
 
 @dataclass
@@ -166,12 +174,19 @@ def table_data(entries: list[int], base_offset: int) -> bytes:
     return head + body + struct.pack("<I", adler32(body))
 
 
+def error2_fits(first: int, count: int) -> bool:
+    """error2 holds 32-bit sector numbers: a run at or past sector 2^32 (2 TiB
+    at 512-byte sectors) cannot be written there, and is never wrapped."""
+    return 0 <= first and first + count <= 0xFFFFFFFF
+
+
 def error2_data(ranges: list[tuple[int, int]]) -> bytes:
-    """`ranges` are (first sector, sector count)."""
+    """`ranges` are (first sector, sector count). Only runs that fit 32 bits;
+    the caller lists the rest elsewhere (`EwfWriter.error2_omitted`)."""
+    ranges = [(f, c) for f, c in ranges if error2_fits(f, c)]
     head = struct.pack("<I", len(ranges)) + b"\x00" * 512
     head += struct.pack("<I", adler32(head))
-    body = b"".join(struct.pack("<II", first & 0xFFFFFFFF, count & 0xFFFFFFFF)
-                    for first, count in ranges)
+    body = b"".join(struct.pack("<II", first, count) for first, count in ranges)
     return head + body + struct.pack("<I", adler32(body))
 
 
@@ -202,11 +217,18 @@ class EwfWriter:
                  segment_bytes: int | None = None, compression: str = "fast",
                  case_text: CaseText | None = None,
                  media_type: int = MEDIA_FIXED, physical: bool = True,
-                 chs: tuple = (0, 0, 0)) -> None:
+                 chs: tuple = (0, 0, 0), threads: int | None = None) -> None:
         if compression not in COMPRESSION:
             raise ValueError(f"compression is one of {sorted(COMPRESSION)}")
         if size <= 0 or bytes_per_sector <= 0 or sectors_per_chunk <= 0:
             raise ValueError("size, sector size and chunk size must be positive")
+        if size % bytes_per_sector:
+            # EWF describes a disk in whole sectors. A tail that is not one
+            # would make the geometry promise bytes that were never read —
+            # so it is refused, not padded: padding would change the hash.
+            raise ValueError(
+                f"{size:,} bytes is not a whole number of {bytes_per_sector}-"
+                "byte sectors; an E01 cannot hold it exactly (write RAW).")
         self.base = str(base)
         self._open = open_segment
         self.size = int(size)
@@ -235,6 +257,14 @@ class EwfWriter:
         self.chunks_written = 0
         self.stored_bytes = 0
         self._finished = False
+        #: Unreadable runs past sector 2^32, which error2 cannot hold.
+        self.error2_omitted: list = []
+        #: zlib releases the GIL, so chunks compress in parallel and are
+        #: stored in order. One thread when there is nothing to compress.
+        n = threads if threads is not None else min(4, os.cpu_count() or 1)
+        self._pool = (ThreadPoolExecutor(max_workers=n,
+                                         thread_name_prefix="ewf-zlib")
+                      if self._level is not None and n > 1 else None)
 
     # -- low level ---------------------------------------------------------
     def _put(self, data: bytes) -> None:
@@ -295,7 +325,16 @@ class EwfWriter:
         return (self._pos + self.chunk_size + 4 + tables + _TAIL_RESERVE
                 > self.segment_bytes)
 
-    def _store_chunk(self, chunk: bytes) -> None:
+    def _pack(self, chunk: bytes) -> bytes | None:
+        """The chunk compressed, or None when compressing does not shrink it
+        (or compression is off)."""
+        if self._level is None:
+            return None
+        packed = zlib.compress(chunk, self._level)
+        return packed if len(packed) < len(chunk) else None
+
+    def _store_chunk(self, chunk: bytes, packed: bytes | None = None,
+                     prepacked: bool = False) -> None:
         if self._fh is None:
             self._open_segment()
         if self._group_start is not None and (
@@ -309,11 +348,12 @@ class EwfWriter:
                 self._open_segment()
         if self._group_start is None:
             self._start_group()
-        stored, flag = chunk + struct.pack("<I", adler32(chunk)), 0
-        if self._level is not None:
-            packed = zlib.compress(chunk, self._level)
-            if len(packed) < len(chunk):
-                stored, flag = packed, COMPRESSED
+        if not prepacked:
+            packed = self._pack(chunk)
+        if packed is not None:
+            stored, flag = packed, COMPRESSED
+        else:
+            stored, flag = chunk + struct.pack("<I", adler32(chunk)), 0
         rel = self._pos - self._group_base
         if rel > OFFSET_LIMIT:
             raise ValueError("chunk offset past 31 bits from its base — "
@@ -332,9 +372,18 @@ class EwfWriter:
         self._written += len(data)
         self._pending += data
         cs = self.chunk_size
-        while len(self._pending) >= cs:
-            self._store_chunk(bytes(self._pending[:cs]))
-            del self._pending[:cs]
+        whole = len(self._pending) // cs
+        if not whole:
+            return
+        chunks = [bytes(self._pending[i * cs:(i + 1) * cs])
+                  for i in range(whole)]
+        del self._pending[:whole * cs]
+        if self._pool is not None and len(chunks) > 1:
+            for chunk, packed in zip(chunks, self._pool.map(self._pack, chunks)):
+                self._store_chunk(chunk, packed, prepacked=True)
+        else:
+            for chunk in chunks:
+                self._store_chunk(chunk)
 
     def finish(self, md5: bytes, sha1: bytes, bad_ranges=()) -> list[str]:
         """Close the set: the last chunk, error2, hash, digest, done."""
@@ -345,16 +394,28 @@ class EwfWriter:
             self._store_chunk(bytes(self._pending))
             self._pending.clear()
         self._end_group()
-        if bad_ranges:
-            self._section("error2", error2_data(list(bad_ranges)))
+        bad_ranges = list(bad_ranges)
+        self.error2_omitted = [r for r in bad_ranges if not error2_fits(*r)]
+        if any(error2_fits(*r) for r in bad_ranges):
+            self._section("error2", error2_data(bad_ranges))
         self._section("hash", hash_data(md5))
         self._section("digest", digest_data(md5, sha1))
         self._terminal("done")
         self._fh.flush()
+        try:
+            os.fsync(self._fh.fileno())
+        except (AttributeError, OSError, ValueError):
+            pass                      # not a real file (the suite's sinks)
         self._fh.close()
         self._fh = None
         self._finished = True
+        self._shutdown()
         return list(self.paths)
+
+    def _shutdown(self) -> None:
+        if self._pool is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
 
     def abandon(self) -> list[str]:
         """Stop without finishing (a cancel or a failure): close what is open.
@@ -366,4 +427,5 @@ class EwfWriter:
             finally:
                 self._fh.close()
                 self._fh = None
+        self._shutdown()
         return list(self.paths)

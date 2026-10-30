@@ -120,6 +120,54 @@ subprocess path, the models through SpeechBrain 1.1.1 on stand-in weights, and
 the two ATK pages under real Qt; **not yet run on Windows or on the real
 weights** (§13.7).
 
+**2026-10-29 — SAM Audio REMOVED (Bill: "Go ahead and remove Sam").** Gone:
+`media/sam_audio.py`, the prompted-separator interface (`separator.py`), the
+weights manifest (`weights.py`), seed disagreement (`disagreement.py`), SAM's
+part of `lab.py` (run, windows, replay, negative control), the `media-sam /
+-list / -replay / -pin / -weights / -negative-control` commands, the SAM and
+audio.cpp capability rows and the owner exception (`OWNER_EXCEPTIONS` is now
+empty; the mechanism stays). The child-process runner that restoration and
+voice comparison were already using moved to `media/proc.py`; `lab.py` keeps
+only what they share. In ATK: the Media Lab page, `get_sam.bat`, the
+install.bat step and summary line, and the component entry. A case made before
+then may still hold SAM runs under `<case>/media/`: they are not deleted and
+still read back as Invented. §12.9 below is kept as the record of what was
+built.
+
+**2026-10-29 — drive imaging BUILT (`acquire.py`, `ewfwrite.py`).** Bill:
+*"Lets build in everything starting with the hunts and a hard drive imager."*
+A physical drive or one volume to EnCase E01 (fast / best / no compression) or
+RAW, one file or split; MD5/SHA-1/SHA-256 in the read; unreadable sectors
+retried, zero-filled and listed (log, custody, E01 `error2`); read back and
+hashed again; FTK-style log; custody and registration in the case. Two new
+writer kinds in the ratchet — `acquisition` (only into the examiner's
+destination, never a case, never the source's disk) and `device-query` (only
+read-only control codes). The E01 writer is held to libewf's `ewfverify` and
+`pyewf` as well as `ewf.py`: single and split sets, every compression,
+`error2`, and base-offset tables past 2 GiB all pass. CLI `drives`, `acquire`.
+ATK: the **Acquire** page (second, after Case). **Not yet run on a real
+Windows drive** — the Windows drive queries are written to the documented
+structures and guarded, and the first real run is the test.
+
+**2026-10-29 — Hunts: the model layer BUILT (§10.2's second layer).** In ATK,
+`atk/core/dfw_ai.py`, over the engine's new `corpus.py` (lists a case's
+pictures, videos, documents, text and e-mail; reads one into memory through
+the read-only door; one hashed working copy of a video for FFmpeg, with
+custody). Four layers, every result a PROPOSAL attributed `model:<file>`:
+Image Analysis's hunt library over every picture; **30 frames per video, one
+at a random moment in each of 30 equal stretches**, seeded from the video's
+hash so a re-run samples the same frames, decoded through a pipe and never
+written; text hunts whose finding is a **verbatim quote, checked against the
+text**; and **translation with its reasoning** (source language, confidence,
+each idiom / slang / code word / ambiguity with how it was rendered and why,
+what could not be translated), the original kept verbatim beside it. ATK: the
+**Hunts** page (deterministic hunts and the model's, with an estimate) before
+Findings; Findings colours leads by who made them (engine cyan, model violet)
+and shows them readably. Engine 0.3.0.
+
+**FTK parity — §14** is the honest comparison and the build order Bill asked
+for ("build in everything").
+
 `python -m forensics_workshop capabilities` lists what is built, what is not,
 and which routes the licence rule excludes.
 
@@ -178,8 +226,8 @@ parsers against real ntfs-3g and util-linux output.
 - **Not built in Phase 2:** LZNT1 decompression (compressed streams are
   refused, not returned), FAT/exFAT directories (volumes are identified and
   can be carved), ext4, VHDX/VMDK (to be native, §1.1; **E01/EWF is now BUILT**), Volume Shadow Copies (Phase 4),
-  `$MFT`/`$J` files exported by collection tools such as KAPE, and a live
-  physical-device reader.
+  `$MFT`/`$J` files exported by collection tools such as KAPE. (A live
+  physical-device reader — the drive imager — was built 2026-10-29.)
 - The USB `WriteProtect` policy and the write probe have not run on Windows.
 
 ---
@@ -1272,7 +1320,12 @@ missing-person search that is worse than a blurry real one. GFPGAN /
 RestoreFormer++ (Apache-2.0) may appear only in the generative lane, bannered;
 CodeFormer is excluded (S-Lab, non-commercial).
 
-### 12.9 SAM Audio through audio.cpp
+### 12.9 SAM Audio through audio.cpp — REMOVED 2026-10-29
+
+**Removed on Bill's decision, 2026-10-29.** What follows is the record of what
+was built and why; none of it is in the engine any longer (see the Status
+block at the top).
+
 
 **What it is.** Meta's SAM Audio (December 2025) separates a sound selected by
 text, by a visual mask on something in frame, or by time anchors, using flow
@@ -2192,3 +2245,50 @@ ultrasound (co-prime sampling); a steady tone's phase as a motion sensor;
 the reverberation tail of a sound from before "record" was pressed; the
 `conjoined-burgers` RNNoise model (general sound, recording noise — kept,
 not speech-only) beside the speech one.
+
+---
+
+## 14. FTK parity — where it stands, and the build order (Bill, 2026-10-29)
+
+Bill asked whether the workshop can do everything FTK can. It cannot yet, and
+the gap is mostly breadth: Windows artifacts, file systems, e-mail stores,
+reporting and scale. In a few places it is ahead (a verifiable hash-chained
+custody log; read-only by construction; proposals kept apart from findings;
+carving candidates with stated lengths; audio restoration and voice
+comparison; translation with stated reasoning). His decision: **build it
+all**, starting with the hunts and a drive imager (both done 2026-10-29).
+
+| area | FTK | here, 2026-10-29 | next |
+|---|---|---|---|
+| acquisition | FTK Imager | **built**: E01/RAW, verified, custody | AD1 and Ex01 output; RAM capture is out (licence-free route needed) |
+| image formats in | E01, Ex01, AD1, AFF/AFF4, SMART, VMDK, VHD(X) | RAW/split, E01, fixed VHD | **AD1** (FTK's own logical image) and **Ex01**, then VHDX/VMDK (native, §1.1) |
+| file systems | NTFS, FAT/exFAT, HFS+, APFS, ext | NTFS | **FAT/exFAT directories** first (every SD card and thumb drive), then ext4, HFS+; APFS via pyfsapfs |
+| Windows artifacts | registry viewer, LNK, prefetch, jump lists, event logs, shellbags, VSS | none | **registry hives** (+ Amcache/Shimcache/shellbags/USB history), **LNK + Jump Lists**, **Prefetch**, **EVTX event logs** (not in Phase 4 as first written — added here), SRUM/ESE, then VSS |
+| full-text search | dtSearch index | hunts over parsed rows; model text hunts read bodies in memory | a **full-text index** in the case's index.db with SQLite FTS5 (stdlib), fed by the same text extraction, searchable from a page |
+| known files | KFF / NSRL | known-bad SHA-256 list | **known-good filtering** (NSRL RDS or any hash set) to hide OS and program files |
+| e-mail | PST/OST, NSF, EDB, MBOX | EML, mbox | **PST/OST** native (the format is documented), then MSG |
+| decryption | BitLocker, EFS, PRTK/DNA | detects BitLocker/LUKS | a decision for Bill: decryption needs a permitted crypto dependency (§1, §9.1) |
+| mobile | built-in parsing | iOS backups (CLI) | the Mobile page; iOS 12+ `attributedBody`; Android (§9) |
+| memory | memory analysis | deferred | still deferred: no licence-permitted route (§5, Phase 5) |
+| AI triage | EID, AI multimedia search, NLP search | **built**: model hunts over pictures, video frames, text; translation | OCR of scanned pages and pictures into the text hunts; transcripts (Whisper) into the text hunts |
+| reporting | case reports | none (`reports/` is empty) | **report generator** over CONFIRMED findings only, saying which sentences came from a model; CSV/JSON IOC export |
+| scale | distributed processing, DB backend | pure Python, one job per page | measure on a real 1-2 TB image first; then parallel parsing where it pays |
+| validation | years of court use, NIST CFTT | field-proven: none yet | a test-image set with known answers (NIST CFReDS, the Belka CTF images), results compared with Autopsy/FTK where available, written up per release |
+
+**Build order** (most case value per hour first; each its own increment, each
+with its own tests and a page or a button — Bill does not live at the command
+line):
+
+1. Pages for what is already built: DOMEX rows (with the GPS map hand-off), the
+   change-journal table, the mobile page.
+2. FAT/exFAT directories, deleted entries included.
+3. Windows artifacts: registry hives (and what lives in them), LNK + Jump
+   Lists, Prefetch (Win10 MAM via `RtlDecompressBufferEx`), EVTX.
+4. Report generator (confirmed findings only) and IOC export.
+5. PST/OST.
+6. Known-good hash filtering (NSRL or any set).
+7. AD1 and Ex01 readers; AD1 output.
+8. Full-text index (FTS5) and its search page; OCR into it.
+9. Super timeline across everything above (Phase 4).
+10. Volume Shadow Copies; ext4; HFS+; APFS (library).
+11. The validation set and its write-up.

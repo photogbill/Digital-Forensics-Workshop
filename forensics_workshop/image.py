@@ -65,6 +65,29 @@ _ALPHA = re.compile(r"^[a-z]{2}$|^[A-Z]{2}$")
 _EWF = re.compile(r"^[Ee](\d\d|[A-Za-z]{2})$")
 
 
+def _ewf_next_suffix(suffix: str) -> str | None:
+    """The EWF segment extension after `suffix`: E01…E99, EAA…EZZ, then
+    FAA…ZZZ — EnCase's and libewf's scheme, 14,971 segments in all. Case is
+    kept from the first letter. A drive over ~1.6 TB in 2 GB segments needs
+    the F… names (review of the imager, 2026-10-29)."""
+    lower = suffix[:1].islower()
+    s = suffix.upper()
+    if s[1:].isdigit():
+        n = int(s[1:])
+        nxt = f"E{n + 1:02d}" if n < 99 else "EAA"
+    else:
+        a, b, c = (ord(ch) - 65 for ch in s)
+        c += 1
+        if c == 26:
+            c, b = 0, b + 1
+        if b == 26:
+            b, a = 0, a + 1
+        if a == 26:
+            return None
+        nxt = chr(65 + a) + chr(65 + b) + chr(65 + c)
+    return nxt.lower() if lower else nxt
+
+
 def _ewf_next(two: str) -> str | None:
     """The EWF segment suffix after `two` (the chars past the E): 01…99 then
     AA…ZZ, EnCase's scheme."""
@@ -150,13 +173,13 @@ def discover_segments(path) -> list[Path]:
                     f"{first} is EWF segment {suffix}, not the first. Register "
                     f"{stem}.{letter}01 — the whole set is read from it.")
             return [first]
-        segments = [first]
-        while (nxt := _ewf_next(two)) is not None:
-            cand = sibling(f"{letter}{nxt}")
+        segments, cur = [first], suffix
+        while (nxt := _ewf_next_suffix(cur)) is not None:
+            cand = sibling(nxt)
             if not cand.is_file():
                 break
             segments.append(cand)
-            two = nxt
+            cur = nxt
         return segments
     if _NUMERIC.match(suffix):
         width, number = len(suffix), int(suffix)

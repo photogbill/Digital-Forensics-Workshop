@@ -6,7 +6,9 @@ Offline, standard library only, and usable on its own from the command line.
 - **Package:** `forensics_workshop` (what ATK probes)
 - **Repository:** `github.com/photogbill/Digital-Forensics-Workshop`
 - **Status:** Phases 1 and 2 of [`FORENSICS_PLAN.md`](FORENSICS_PLAN.md), built 2026-09-11;
-  Phase 3 begun; media recovery's SAM Audio lane (§12.9) built 2026-10-05, not yet run on Windows
+  Phase 3 under way; **drive imaging** built 2026-10-29 (not yet run on a Windows
+  drive); SAM Audio **removed** 2026-10-29. Where it stands against FTK, and the
+  build order, is §14 of the plan.
 - **Licence:** all rights reserved; see [`LICENSE`](LICENSE)
 - **Dependencies:** none outside the Python standard library. Anything added
   must pass the licence rule — nothing that restricts commercial use
@@ -70,26 +72,45 @@ built, what is planned and in which phase, which third-party packages are
 present and under what licence, what is deferred or out of scope, and which
 third-party routes the licence rule excludes, with the licence that fails.
 
-## Media recovery — SAM Audio (FORENSICS_PLAN §12.9), built 2026-10-05
+## Drive acquisition — built 2026-10-29
 
-`forensics_workshop/media/` — the first piece of §12: Meta's **SAM Audio**, a
-*generative* sound separator ("man speaking", "woman in the background",
-with `+`/`-` time anchors), run by **audio.cpp v0.9.0**'s `audiocpp_cli` as a
-**separate process** (a CUDA fault takes down the child, never the engine).
-**Not yet run on Windows, and not for court** — investigative leads only.
+`acquire.py` images a physical drive (or one volume) the way FTK Imager does:
+read once through the read-only door, **MD5, SHA-1 and SHA-256 in that same
+read**, written as an **EnCase E01** set (`ewfwrite.py`, fast / best / no
+compression) or **RAW/DD**, one file or split; then read back through the
+engine's own readers and hashed again. An FTK-style log goes beside the image;
+in a case, `acquisition.started` / `.completed` custody and the image is
+registered as evidence.
 
 | | |
 |---|---|
-| **Five trust tiers** | measured · recovered · cleaned · inferred · **invented**. An output carries the highest tier of any step behind it; every SAM file is named `…invented.wav`; the tier is in its sidecar and its custody record. A model's watermark is never relied on. |
-| **Recipes** | `<case>/media/<recipe-id>/recipe.json` plus a `<file>.recipe.json` sidecar beside every output: tool, version, model SHA-256, parameters, seed, time range, input and output hashes. `media-replay` re-runs one from the untouched original (measured steps bit-exact; generative stems within 1 dB per 250 ms window). |
-| **Forensic door** | The original is read once through `blocker.open_evidence` into a hashed copy; a video's audio is extracted by an injected FFmpeg as a *measured* step. Outputs only ever go into the case, with `media.started` / `media.derived` / `media.failed` custody. |
-| **Several seeds** | Default 3. The port has no candidate ranker, so the run shows **where the seeds disagree**, per 250 ms window (band-energy spread with numpy, RMS envelope without). Choosing a candidate is the examiner's act. The residual — what was removed — is always kept. |
-| **Weights trust** | `model_manifest.json` beside the GGUF. No pin: allowed, and every result says `weights: unverified (parity not run)`. After the parity check against Meta's Python, `media-pin` records the SHA-256 and any other file is **refused**. |
-| **Negative control** | `media-negative-control`: SAM on speech-absent noise — does the target carry sound? Energy check only (the ASR check comes later); recorded against the model's hash. |
-| **Licence** | SAM's weights are under Meta's SAM License — an **owner exception** to §1.1, shown as such in `capabilities` and bound to that one row and licence. audio.cpp is Apache-2.0. Notices: `forensics_workshop/media/NOTICES.md`. |
+| **Read-only, structurally** | The source goes through `blocker.open_evidence`. Drive listing on Windows uses read-only `DeviceIoControl` queries, and the one function that may send them (`_win_query`) refuses any access but none-or-read and any control code not on `READ_ONLY_IOCTLS` — a `device-query` writer in the ratchet, its guard checked. |
+| **Writes only where the examiner said** | Three `acquisition` writers, each guarded by `assert_acquisition_path`. Refused: a destination on the drive being imaged, inside a case, overlapping evidence, or not empty. |
+| **Unreadable sectors** | Retried sector by sector, then zero-filled, listed (as runs) in the log, custody and the E01 `error2` section; the hashes are of what was written. A drive that disappears mid-run, or more than 1 GB in a row that will not read, STOPS the run — an image of zeros is never marked verified. Stop is heard within half a second, even mid-retry. |
+| **A volume is read through its disk** | `\\.\E:` stops where the file system says the volume ends (NTFS one sector early — its backup boot sector). A Windows volume is therefore read through `\\.\PhysicalDriveN` from the volume's first byte, for its whole length; a volume that spans disks, or sits in a virtual/encrypted container, is refused with the reason. |
+| **Checked by a reader we did not write** | Every E01 the suite makes is read back by `ewf.py` and, where libewf is installed, by `ewfverify` — single and split sets, all three compressions, `error2`, and base-offset tables past 2 GiB. |
+| **Not a write blocker** | Windows may have mounted and touched the drive before it was opened. Imaging the running system disk is warned: a smear, not a snapshot. Windows needs Administrator. |
 
-numpy is optional (`pip install .[media]`); everything else is the standard
-library. ATK's `get_sam.bat` builds the runtime and downloads the weights.
+## What the model hunts read — `corpus.py`
+
+ATK's model hunts (pictures, 30 frames across each video, text with verbatim
+quotes, translation with its reasoning — in ATK's `atk/core/dfw_ai.py`) need
+the bytes of files, not parsed rows. `corpus.py` lists an evidence item's
+pictures, videos, documents, text and e-mail — from a folder's manifest (typed
+by bytes) or a disk image's NTFS entries (by extension, re-typed when read) —
+and reads one **into memory** through the read-only door. It writes nothing,
+except `working_copy`: one hashed copy of a video inside `<case>/working/`
+for FFmpeg to seek in, with custody. Every model result is a proposal in the
+review queue, attributed `model:<file>`; the model never writes custody.
+
+## Media recovery
+
+**SAM Audio was removed on 2026-10-29** (its adapter, the separator interface,
+the weights manifest, seed disagreement, and the `media-sam / -replay / -pin /
+-weights / -negative-control` commands). Restoration and voice comparison
+(§13) are unchanged; the child-process runner they used moved to
+`media/proc.py`. A case made before then may still hold SAM runs under
+`<case>/media/`: they are not deleted, and still read back as Invented.
 
 ## Command line
 
@@ -104,6 +125,9 @@ python -m forensics_workshop extract     D:\cases\OP-1 E001 Documents\x.pdf --ex
 python -m forensics_workshop browser     D:\cases\OP-1 E001 --examiner "Name"
 python -m forensics_workshop artefacts   D:\cases\OP-1 E001 --examiner "Name" --kind visit
 python -m forensics_workshop custody     D:\cases\OP-1 --examiner "Name"
+python -m forensics_workshop drives
+python -m forensics_workshop acquire     \\.\PhysicalDrive2 E:\images\OP-1 --name OP-1_E003 --examiner "Name" --case D:\cases\OP-1 --write-blocker "Tableau T35u"
+python -m forensics_workshop corpus      D:\cases\OP-1 E002 --examiner "Name" --families image,video
 python -m forensics_workshop usb-policy  status
 python -m forensics_workshop probe-write F:\ --i-confirm-this-is-not-evidence
 
@@ -129,16 +153,7 @@ python -m forensics_workshop findings       D:\cases\OP-1 --examiner "Name" [--s
 python -m forensics_workshop confirm        D:\cases\OP-1 FINDING_ID --examiner "Name" [--note "..."]
 python -m forensics_workshop reject         D:\cases\OP-1 FINDING_ID --examiner "Name" [--note "..."]
 
-python -m forensics_workshop media-sam      D:\cases\OP-1 calls\clip.mp4 --evidence E001 --examiner "Name" --text "woman in the background" --anchor +0.5:2.0 --anchor=-3:4 --seeds 3 --model ATK\models\sam-audio\sam-audio-large-q8_0.gguf --audiocpp ATK\bin\audiocpp\audiocpp_cli.exe --ffmpeg ATK\bin\ffmpeg\ffmpeg.exe
-python -m forensics_workshop media-list     D:\cases\OP-1 --examiner "Name" [--id RECIPE_ID]
-python -m forensics_workshop media-replay   D:\cases\OP-1 RECIPE_ID --examiner "Name" --audiocpp ...
-python -m forensics_workshop media-pin      ATK\models\sam-audio\sam-audio-large-q8_0.gguf --by "Name" --note "parity checked"
-python -m forensics_workshop media-weights  ATK\models\sam-audio\sam-audio-large-q8_0.gguf
-python -m forensics_workshop media-negative-control noise.wav --out ATK\data\media\harness --model ... --audiocpp ...
 ```
-
-An exclude anchor is written `--anchor=-3:4` (or `--exclude 3:4`): without the
-`=`, the leading minus reads as an option.
 
 `--examiner` is required wherever a case is opened, because opening a case is
 itself a custody record.
