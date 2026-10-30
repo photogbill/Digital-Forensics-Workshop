@@ -458,6 +458,13 @@ def hash_image(source: ImageSource, *, should_cancel=None,
                 if not chunk:
                     break
                 if same:
+                    room = source.size - whole.size
+                    if len(chunk) > room:
+                        raise EvidenceError(
+                            f"{seg.path} grew while it was being hashed (past "
+                            f"its {source.size:,} bytes). An image that changes "
+                            "under the reader cannot be hashed; nothing was "
+                            "recorded.")
                     whole.update(chunk)
                     done += len(chunk)
                     if progress is not None and done % (256 * CHUNK) < CHUNK:
@@ -474,6 +481,11 @@ def hash_image(source: ImageSource, *, should_cancel=None,
                 if progress is not None and done % (256 * CHUNK) < CHUNK:
                     progress(f"hashed {done:,} of {source.info.file_bytes:,} bytes")
         per_segment.append(seg_hasher.result())
+    if whole.size != source.size:
+        raise EvidenceError(
+            f"The image's disk bytes hashed ({whole.size:,}) are not its size "
+            f"({source.size:,}); a segment changed size while it was read. "
+            "Nothing was recorded.")
     return whole.result(), per_segment
 
 

@@ -265,7 +265,7 @@ CREATE TABLE IF NOT EXISTS fat_entries (
     accessed_epoch  TEXT,
     accessed_value  TEXT,
     dir_entry_offset INTEGER,          -- bytes from the start of the VOLUME
-    slot_hex        TEXT,              -- the 32-byte short (exFAT: file) slot
+    slot_hex        TEXT,              -- FAT: the short-name slot; exFAT: the File + Stream Extension slots
     recovery_basis  TEXT,
     clusters        INTEGER,
     clusters_now_allocated INTEGER,

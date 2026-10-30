@@ -19,9 +19,11 @@ like the NTFS functions in `diskimage.py` so a page treats both the same.
   how many of those clusters are now allocated to something else.
 
 **WHAT IS SHOWN IS WHAT IS ON THE IMAGE NOW.** The index keeps each entry's
-32-byte directory slot as it was parsed; a preview or a recovery re-reads
-that slot from the image and refuses to go on if it differs (re-parse the
-volume), because the cluster list it would follow came from that slot.
+directory slot as it was parsed — FAT's short-name slot; exFAT's File and
+Stream Extension slots, which hold the first cluster, the size and the
+NoFatChain flag — and a preview or a recovery re-reads it from the image and
+refuses to go on if it differs (re-parse the volume), because the cluster
+list it would follow came from that slot.
 
 **A FAT TIME IS LOCAL, WITH NO ZONE.** It is kept raw with its epoch and a
 naive decoded value, and is never written into a UTC column; exFAT's is UTC
@@ -105,6 +107,27 @@ def open_fat_volume(case, evidence_id: str, volume: int):
     return source, vol, row
 
 
+def _slot_span(vol, e) -> int:
+    """How many bytes from `dir_entry_offset` the slot check covers. FAT:
+    the 32-byte short-name slot, which holds the first cluster and the size
+    the content is read by. exFAT: the File slot AND the Stream Extension
+    slot after it (first cluster, size, valid-data length, NoFatChain) —
+    64 bytes — unless that second slot sits in the folder's NEXT cluster,
+    which need not be adjacent; then the File slot only, and the detail says
+    so."""
+    if getattr(vol, "fs_type", "") != "exFAT":
+        return fat.SLOT
+    try:
+        heap = vol.cluster_offset(2)
+        cs = vol.cluster_size
+    except Exception:                                     # noqa: BLE001
+        return fat.SLOT
+    rel = e.dir_entry_offset - heap
+    if rel >= 0 and rel // cs == (rel + 2 * fat.SLOT - 1) // cs:
+        return 2 * fat.SLOT
+    return fat.SLOT
+
+
 def _times(t) -> tuple:
     if t is None:
         return None, None, None
@@ -158,7 +181,7 @@ def parse_fat(case, evidence_id: str, volume: int, *, progress=None,
         summary.orphan_names = len(vol.orphan_names)
         rows = []
         for n, e in enumerate(entries, 1):
-            slot = vol.reader.read_at(e.dir_entry_offset, fat.SLOT)
+            slot = vol.reader.read_at(e.dir_entry_offset, _slot_span(vol, e))
             rows.append(_db_row(evidence_id, volume, run_id, n, e, slot))
             summary.entries += 1
             summary.deleted += e.deleted
@@ -277,7 +300,8 @@ def _entry(d: dict) -> fat.FatEntry:
 
 def _check_slot(vol, stored: dict) -> str:
     """'' when the slot on the image is the one parsed, else why not."""
-    now = vol.reader.read_at(stored["dir_entry_offset"], fat.SLOT).hex()
+    span = max(fat.SLOT, len(stored.get("slot_hex") or "") // 2)
+    now = vol.reader.read_at(stored["dir_entry_offset"], span).hex()
     if now != stored.get("slot_hex"):
         return ("The directory slot at volume offset "
                 f"{stored['dir_entry_offset']:,} no longer matches what was "
@@ -291,6 +315,11 @@ def fat_entry_detail(case, evidence_id: str, volume: int, entry_id: int) -> dict
     source, vol, row = open_fat_volume(case, evidence_id, volume)
     try:
         stored["slot_check"] = _check_slot(vol, stored) or "matches the image"
+        if stored.get("fs") == "exFAT" and len(stored.get("slot_hex") or "") \
+                < 4 * fat.SLOT:
+            stored["slot_check"] += (" (the File slot only: its Stream "
+                                     "Extension slot is in the folder's next "
+                                     "cluster and is not re-checked)")
         stored["volume_entry"] = row["entry"]
         stored["epochs"] = {k: fat.EPOCHS[k] for k in {
             stored.get("modified_epoch"), stored.get("created_epoch"),

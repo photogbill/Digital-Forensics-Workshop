@@ -34,7 +34,14 @@ is deleted is still read — those are small and often the point — and every
 row from it says the file was deleted (`provenance` "deleted-file") and how
 many of its clusters are now someone else's. Deleted hives, logs and
 mailboxes are not read by default: they are large, and their clusters are
-more often reused than not.
+more often reused than not. On FAT, "deleted" includes an entry inside a
+deleted folder and one hidden after an end-of-directory marker; the row says
+which (`deleted_how`).
+
+**A FOLDER'S FILES ARE CHECKED AGAINST ITS MANIFEST.** Each file's bytes are
+hashed as they are read and compared with the SHA-256 the ingest recorded; a
+file changed since then is still parsed, but its rows say so
+(`matches_manifest` false) and the run lists it.
 
 **THE ROWS ARE MEASUREMENTS.** "Prefetch records 7 runs of X.EXE, last at
 …" — never "the user ran X". Each row keeps its time raw with its epoch; a
@@ -111,6 +118,7 @@ class WinSummary:
     skipped_total: int = 0
     bytes_read: int = 0
     seconds: dict = field(default_factory=dict)      # {"total": wall seconds}
+    manifest_mismatches: list = field(default_factory=list)  # changed since ingest
     workers: int = 0                                 # parsing processes used
     worker_restarts: int = 0
     notes: list = field(default_factory=list)
@@ -139,6 +147,11 @@ class _File:
     key: int                       # MFT record or FAT entry id
     clusters: int | None = None
     clusters_now_allocated: int | None = None
+    #: why it counts as deleted: "record not in use" (NTFS), "deleted entry",
+    #: "inside a deleted folder", "after the end-of-directory marker" (FAT)
+    deleted_how: str = ""
+    #: a folder file's SHA-256 as the ingest recorded it (the manifest)
+    manifest_sha256: str = ""
 
 
 def _ntfs_files(case, evidence_id, volume) -> list[_File]:
@@ -150,21 +163,32 @@ def _ntfs_files(case, evidence_id, volume) -> list[_File]:
         ).fetchall()
     return [_File(r["path"] or r["name"], r["name"] or "", r["size"] or 0,
                   not r["in_use"], f"mft{r['record']}", r["record"],
-                  r["clusters"], r["clusters_now_allocated"]) for r in rows
+                  r["clusters"], r["clusters_now_allocated"],
+                  "" if r["in_use"] else "record not in use") for r in rows
             if kind_of(r["path"], r["name"])]
 
 
 def _fat_files(case, evidence_id, volume) -> list[_File]:
     with _index.session(case.root) as conn:
         rows = conn.execute(
-            "SELECT entry_id, deleted, name, path, size, clusters, "
-            "clusters_now_allocated FROM fat_entries WHERE evidence_id = ? AND "
-            "volume = ? AND is_dir = 0 AND size > 0", (evidence_id, volume)
-        ).fetchall()
-    return [_File(r["path"] or r["name"], r["name"] or "", r["size"] or 0,
-                  bool(r["deleted"]), f"fat{r['entry_id']}", r["entry_id"],
-                  r["clusters"], r["clusters_now_allocated"]) for r in rows
-            if kind_of(r["path"], r["name"])]
+            "SELECT entry_id, deleted, in_deleted_dir, past_end_marker, name, "
+            "path, size, clusters, clusters_now_allocated FROM fat_entries "
+            "WHERE evidence_id = ? AND volume = ? AND is_dir = 0 AND size > 0",
+            (evidence_id, volume)).fetchall()
+    out = []
+    for r in rows:
+        if not kind_of(r["path"], r["name"]):
+            continue
+        # An entry inside a deleted folder, or hidden after an end-of-
+        # directory marker, is NOT a live file even when its own mark is
+        # clear: no driver would show it, and its clusters may be reused.
+        how = ("deleted entry" if r["deleted"] else
+               "inside a deleted folder" if r["in_deleted_dir"] else
+               "after the end-of-directory marker" if r["past_end_marker"] else "")
+        out.append(_File(r["path"] or r["name"], r["name"] or "", r["size"] or 0,
+                         bool(how), f"fat{r['entry_id']}", r["entry_id"],
+                         r["clusters"], r["clusters_now_allocated"], how))
+    return out
 
 
 class _Reader:
@@ -305,9 +329,18 @@ def _db_row(run_id, evidence_id, volume, f: _File, kind, sha256, r) -> tuple:
     detail = dict(r.get("detail") or {})
     detail["file"] = {"path": f.path, "ref": f.ref, "size": f.size,
                       "deleted": f.deleted, "sha256": sha256 or None}
+    if not sha256:
+        detail["file"]["sha256_note"] = (
+            "not hashed in this pass: larger than the in-memory cap, read "
+            "through a reader")
+    if f.manifest_sha256:
+        detail["file"]["manifest_sha256"] = f.manifest_sha256
+        detail["file"]["matches_manifest"] = (
+            None if not sha256 else sha256 == f.manifest_sha256)
     if f.deleted:
         detail["file"].update(clusters=f.clusters,
-                              clusters_now_allocated=f.clusters_now_allocated)
+                              clusters_now_allocated=f.clusters_now_allocated,
+                              deleted_how=f.deleted_how)
         detail["deleted"] = True
     suffix = r.get("row_ref_suffix") or ""
     raw = r.get("at_raw")
@@ -368,14 +401,14 @@ def _extract_safe(relpath: str):
 def _folder_files(case, evidence_id) -> list[_File]:
     with _index.session(case.root) as conn:
         rows = conn.execute(
-            "SELECT relpath, size FROM files WHERE evidence_id = ? AND "
+            "SELECT relpath, size, sha256 FROM files WHERE evidence_id = ? AND "
             "kind = 'file' AND size > 0", (evidence_id,)).fetchall()
     out = []
     for r in rows:
         name = r["relpath"].rsplit("/", 1)[-1]
         if kind_of(r["relpath"], name):
             out.append(_File(r["relpath"], name, r["size"] or 0, False,
-                             "file", 0))
+                             "file", 0, manifest_sha256=r["sha256"] or ""))
     return out
 
 
@@ -450,8 +483,8 @@ def _run(case, evidence_id, *, scope, target, run_volume, files, opener, logs,
                     progress(f"{n:,} of {len(todo):,}: {kind} {f.path}")
                 if f.deleted and kind not in DELETED_OK:
                     meta.append((kind, f, ""))
-                    yield "ready", (None, "deleted (not read by default for "
-                                          "this kind)")
+                    yield "ready", (None, f"{f.deleted_how or 'deleted'} (not "
+                                          "read by default for this kind)")
                     continue
                 try:
                     reader = opener.reader(f)
@@ -493,6 +526,10 @@ def _run(case, evidence_id, *, scope, target, run_volume, files, opener, logs,
                           else f"parser failed: {name}: {message}")
                 summary.skip(f.path, kind, reason[:300])
                 continue
+            if f.manifest_sha256 and sha and sha != f.manifest_sha256:
+                summary.manifest_mismatches.append(
+                    {"path": f.path, "manifest_sha256": f.manifest_sha256,
+                     "read_sha256": sha})
             summary.files[kind] = summary.files.get(kind, 0) + 1
             summary.deleted_files += f.deleted
             for r in payload:
@@ -515,7 +552,7 @@ def _run(case, evidence_id, *, scope, target, run_volume, files, opener, logs,
         raise
     finally:
         if pool is not None:
-            pool.close()
+            pool.close(kill=summary.state != "completed")
             summary.worker_restarts = pool.restarts
         opener.close()
         summary.seconds = {"total": round(time.monotonic() - t_start, 3)}

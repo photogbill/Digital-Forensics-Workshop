@@ -175,8 +175,14 @@ def _do(summary: PipelineSummary, step: str, vol, should_run: bool, fn):
         return StepResult(step, vol, "failed", error=error,
                           seconds=round(time.monotonic() - t, 2))
     d = out.as_dict() if hasattr(out, "as_dict") else {}
-    return StepResult(step, vol, getattr(out, "state", "completed"),
-                      summary=d, seconds=round(time.monotonic() - t, 2))
+    result = StepResult(step, vol, getattr(out, "state", "completed"),
+                        summary=d, seconds=round(time.monotonic() - t, 2))
+    if result.state == "cancelled":
+        # a step that caught the cancel itself still ends the RUN: recorded,
+        # then the run stops — never "completed" after a Stop
+        summary.results.append(result)
+        raise Cancelled(f"{step} was cancelled")
+    return result
 
 
 # -- the runbook -------------------------------------------------------------

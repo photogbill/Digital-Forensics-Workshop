@@ -43,27 +43,65 @@ def default_workers() -> int:
     return max(0, min(12, (os.cpu_count() or 1) - 2))
 
 
+#: at most this many bytes of jobs are in flight at once, whatever the
+#: number of workers (the parent holds each job until its answer comes back);
+#: one job is always allowed, however big
+MAX_INFLIGHT_BYTES = 1 << 30
+#: bytes objects larger than this travel out of band — written to the pipe
+#: from the original, not copied into the pickle first
+OUT_OF_BAND = 64 << 10
+
 _BOOT = ("import sys; sys.path.insert(0, sys.argv[1]); "
          "from forensics_workshop.parallel import child_main; child_main()")
 _LEN = struct.Struct("<Q")
 
 
+def _oob(obj):
+    """Large bytes inside a job travel out of band (pickle protocol 5)."""
+    if isinstance(obj, (bytes, bytearray)) and len(obj) > OUT_OF_BAND:
+        return pickle.PickleBuffer(obj)
+    if isinstance(obj, tuple):
+        return tuple(_oob(x) for x in obj)
+    return obj
+
+
+def _read_exact(stream, n: int) -> bytes:
+    data = stream.read(n)
+    if len(data) < n:
+        raise EOFError("the other side closed its pipe mid-message")
+    return data
+
+
 def _send(stream, obj) -> None:
-    data = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
-    stream.write(_LEN.pack(len(data)))
-    stream.write(data)
+    """Length-prefixed: the pickle, then each out-of-band buffer as is —
+    a 400 MB hive is written from the bytes the parent already holds, not
+    from a second copy inside the pickle."""
+    buffers: list = []
+    head = pickle.dumps(_oob(obj), protocol=5, buffer_callback=buffers.append)
+    stream.write(_LEN.pack(len(head)))
+    stream.write(head)
+    stream.write(_LEN.pack(len(buffers)))
+    for b in buffers:
+        view = b.raw()
+        stream.write(_LEN.pack(view.nbytes))
+        stream.write(view)
     stream.flush()
 
 
 def _recv(stream):
     head = stream.read(_LEN.size)
     if len(head) < _LEN.size:
-        raise EOFError("the worker closed its pipe")
-    n = _LEN.unpack(head)[0]
-    data = stream.read(n)
-    if len(data) < n:
-        raise EOFError("the worker closed its pipe mid-answer")
-    return pickle.loads(data)          # our own child's answer, nothing else
+        raise EOFError("the other side closed its pipe")
+    data = _read_exact(stream, _LEN.unpack(head)[0])
+    count = _LEN.unpack(_read_exact(stream, _LEN.size))[0]
+    buffers = [_read_exact(stream, _LEN.unpack(_read_exact(stream, _LEN.size))[0])
+               for _ in range(count)]
+    return pickle.loads(data, buffers=buffers)   # our own child's, nothing else
+
+
+def _job_bytes(job) -> int:
+    _func, args = job
+    return sum(len(a) for a in args if isinstance(a, (bytes, bytearray)))
 
 
 def run_job(job) -> tuple:
@@ -115,6 +153,7 @@ class Pool:
         self.started = 0
         self.restarts = 0
         self.error = ""
+        self._closing = False
         for _ in range(self.workers):
             try:
                 proc = _start_worker()
@@ -135,31 +174,66 @@ class Pool:
                 return
             seq, job = item
             proc = self._procs[slot]
+            alive = True
             try:
                 _send(proc.stdin, job)
                 result = _recv(proc.stdout)
-            except (OSError, EOFError, pickle.UnpicklingError) as exc:
+            except BaseException as exc:          # noqa: BLE001 — ALWAYS answer
+                # Whatever went wrong — a dead worker, a broken pipe, memory —
+                # this job gets an answer, or imap would wait for it forever.
                 result = (False, ("WorkerDied",
-                                  f"the parsing worker ended unexpectedly ({exc}); "
-                                  "this file was not parsed"))
+                                  f"the parsing worker failed on this file "
+                                  f"({type(exc).__name__}: {exc}); it was not "
+                                  "parsed"))
                 self._kill(proc)
+                alive = False
+            with self._cond:
+                self._done[seq] = result
+                self._cond.notify_all()
+            if not alive:
+                if self._closing:
+                    return
                 try:
                     self._procs[slot] = _start_worker()
                     self.restarts += 1
-                except OSError:
-                    with self._cond:
-                        self._done[seq] = result
-                        self._cond.notify_all()
+                except BaseException:             # noqa: BLE001
+                    self._fail_queue()
                     return
+
+    def _fail_queue(self) -> None:
+        """No worker left for this slot: answer what is queued, so nothing
+        waits forever (the other slots, if any, keep serving)."""
+        if any(t.is_alive() for t in self._threads
+               if t is not threading.current_thread()):
+            return
+        while True:
+            try:
+                item = self._inq.get_nowait()
+            except queue.Empty:
+                return
+            if item is None:
+                continue
             with self._cond:
-                self._done[seq] = result
+                self._done[item[0]] = (False, ("WorkerDied",
+                                               "no parsing worker could be "
+                                               "started; it was not parsed"))
                 self._cond.notify_all()
 
     @staticmethod
     def _kill(proc) -> None:
+        """End a worker and let go of everything it held."""
         try:
             proc.kill()
         except OSError:
+            pass
+        for stream in (proc.stdin, proc.stdout):
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
             pass
 
     def imap(self, items, *, should_cancel=None, inflight: int | None = None):
@@ -175,8 +249,10 @@ class Pool:
         it = iter(items)
         seq = out = 0
         exhausted = False
+        sizes: dict = {}                   # seq -> bytes held for that job
         while True:
-            while not exhausted and seq - out < limit:
+            while not exhausted and seq - out < limit and (
+                    not sizes or sum(sizes.values()) < MAX_INFLIGHT_BYTES):
                 if should_cancel is not None and should_cancel():
                     raise Cancelled("cancelled")
                 try:
@@ -185,6 +261,7 @@ class Pool:
                     exhausted = True
                     break
                 if kind == "job":
+                    sizes[seq] = _job_bytes(value)
                     self._inq.put((seq, value))
                 else:
                     with self._cond:
@@ -198,30 +275,47 @@ class Pool:
                         raise Cancelled("cancelled")
                     self._cond.wait(0.25)
                 result = self._done.pop(out)
+            sizes.pop(out, None)
             out += 1
             yield result
 
-    def close(self) -> None:
+    def close(self, *, kill: bool = False) -> None:
+        """Stop the workers. `kill` (after a cancel or a failure) ends them
+        at once instead of letting a busy one finish its file."""
+        self._closing = True
+        while True:                       # jobs nobody will wait for now
+            try:
+                self._inq.get_nowait()
+            except queue.Empty:
+                break
         for _ in self._threads:
             self._inq.put(None)
+        if kill:
+            for proc in self._procs:
+                self._kill(proc)
         for proc in self._procs:
             try:
                 proc.stdin.close()
-            except OSError:
+            except (OSError, ValueError):
                 pass
         for proc in self._procs:
             try:
-                proc.wait(timeout=5)
+                proc.wait(timeout=0 if kill else 5)
             except subprocess.TimeoutExpired:
                 self._kill(proc)
-            for stream in (proc.stdout,):
                 try:
-                    stream.close()
-                except OSError:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
                     pass
+            try:
+                proc.stdout.close()
+            except (OSError, ValueError):
+                pass
+        for th in self._threads:
+            th.join(timeout=5)
 
     def __enter__(self) -> "Pool":
         return self
 
-    def __exit__(self, *exc) -> None:
-        self.close()
+    def __exit__(self, exc_type, *exc) -> None:
+        self.close(kill=exc_type is not None)

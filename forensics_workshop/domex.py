@@ -886,16 +886,19 @@ def _mine(vol, entry, tr, category, mail_kind, cap_ceiling, summary) -> list:
                  "title": entry["name"], "value": value, "detail": detail}]
 
     if category == "email":
+        # A row is an `email` only when it IS a message: the mail counts
+        # (Artifacts page, Mail by source, the run summary) count those rows.
         if tr.type_id == "pst":
-            return [{"artefact": "email", "at_utc": at_utc, "at_raw": at_raw,
+            return [{"artefact": "mail-file", "at_utc": at_utc, "at_raw": at_raw,
                      "at_epoch": "filetime" if at_utc else None,
                      "title": entry["name"],
-                     "value": "Outlook store (PST/OST) — detected, not yet parsed",
+                     "value": "Outlook store (PST/OST) — its messages are read "
+                              "by the Windows artefacts and mail pass",
                      "detail": dict(base_detail,
-                                    note="native PST/OST parsing is a later step")}]
+                                    note="read by winartifacts (pst.py)")}]
         rows = read_email_messages(data, mail_kind or "eml")
         if not rows:
-            return [{"artefact": "email", "at_utc": at_utc, "at_raw": at_raw,
+            return [{"artefact": "mail-file", "at_utc": at_utc, "at_raw": at_raw,
                      "at_epoch": "filetime" if at_utc else None,
                      "title": entry["name"], "value": tr.label,
                      "detail": dict(base_detail, note="no messages parsed")}]
@@ -953,7 +956,8 @@ def _clear_volume(case, evidence_id, volume) -> None:
                      (evidence_id, f"v{volume}:%"))
 
 
-ARTEFACT_KINDS = ("image", "document", "email", "archive", "database", "media")
+ARTEFACT_KINDS = ("image", "document", "email", "mail-file", "archive",
+                  "database", "media")
 
 
 def list_domex(case, evidence_id: str, *, artefact: str = "",

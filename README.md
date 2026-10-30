@@ -187,6 +187,7 @@ python -m forensics_workshop confirm        D:\cases\OP-1 FINDING_ID --examiner 
 python -m forensics_workshop reject         D:\cases\OP-1 FINDING_ID --examiner "Name" [--note "..."]
 python -m forensics_workshop report         D:\cases\OP-1 --examiner "Name" [--title "Op Pier"] [--no-iocs]
 python -m forensics_workshop rows           D:\cases\OP-1 --examiner "Name" [--evidence E002] [--parser evtx] [--kind evtx_logon] [--geo] [--since 2026-07-01] [--parsers]
+python -m forensics_workshop mail           D:\cases\OP-1 --examiner "Name" [--evidence E002]      (e-mail by source, total at the bottom)
 python -m forensics_workshop fat            D:\cases\OP-1 E003 --volume 1 --examiner "Name"
 python -m forensics_workshop windows        D:\cases\OP-1 E002 --volume 2 --examiner "Name" [--kinds registry,evtx] [--workers 0]
 python -m forensics_workshop windows        D:\cases\OP-1 E004 --examiner "Name"        (an ingested folder: no --volume)
@@ -204,6 +205,11 @@ writes a synthetic profile to `samples\profile\` and a synthetic split disk
 image to `samples\disk\`.
 
 ## Tests
+
+**`run_tests.bat`** runs everything in one go: this engine's whole suite, then
+ATK's Digital Forensics tests with ATK's own Python (`/all` adds the rest of
+ATK's suite). One line per part and a TOTAL at the bottom; the full output
+goes to `logs\tests\`. By hand:
 
 ```
 python -m unittest discover -s tests

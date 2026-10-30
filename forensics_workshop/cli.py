@@ -254,6 +254,24 @@ def cmd_rows(args) -> int:
     return 0
 
 
+def cmd_mail(args) -> int:
+    """E-mail counted by source, with the total at the bottom."""
+    case = _open(args)
+    m = _query.mail_by_source(case, args.evidence)
+    for g in m["sources"]:
+        other = ", ".join(f"{n:,} {k}" for k, n in sorted(g["other"].items()))
+        print(f"{g['evidence_id']:5} {g['kind']:28} {g['emails']:>9,} e-mails  "
+              f"{g['source']}" + (f"   (+ {other})" if other else "")
+              + (f"   [{g['from_deleted_file']:,} from a DELETED file]"
+                 if g["from_deleted_file"] else ""))
+    print("-" * 78)
+    print(f"TOTAL {m['total_emails']:,} e-mails from {m['total_sources']:,} "
+          f"source(s)" + (f"; {m['total_other']:,} other Outlook items "
+                          "(contacts, calendar, tasks, notes) not counted as mail"
+                          if m["total_other"] else ""))
+    return 0
+
+
 def cmd_custody(args) -> int:
     case = _open(args)
     for row in case.custody.rows()[-args.tail:]:
@@ -1023,6 +1041,12 @@ def build_parser() -> argparse.ArgumentParser:
     rw.add_argument("--parsers", action="store_true",
                     help="list the parsers and kinds that have rows")
     rw.set_defaults(fn=cmd_rows)
+    ml = sub.add_parser("mail", help="e-mail counted by source (each "
+                        "mailbox file), with the total at the bottom")
+    ml.add_argument("case")
+    ml.add_argument("--examiner", required=True)
+    ml.add_argument("--evidence", default="")
+    ml.set_defaults(fn=cmd_mail)
     rp = with_case("report", cmd_report, "write the case report (confirmed "
                    "findings only) and the IOC export into the case")
     rp.add_argument("--title", default="")

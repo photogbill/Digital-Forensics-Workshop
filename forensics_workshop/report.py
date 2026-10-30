@@ -92,6 +92,15 @@ def _model_name(source: str) -> str:
     return source.split(":", 1)[1] if source.startswith("model:") else ""
 
 
+def _csv_safe(value):
+    """A cell a spreadsheet would run as a formula (= + - @, a tab or a
+    carriage return first) is written with a leading apostrophe — the export
+    is shared, and its cells come from evidence. The JSON keeps the value."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
 def iocs(findings) -> list[dict]:
     """Indicators named by CONFIRMED findings, one row per value."""
     out, seen = [], set()
@@ -119,20 +128,55 @@ def iocs(findings) -> list[dict]:
 
 
 def _evidence_hashes(rows, evidence_id: str) -> str:
-    """The latest hashes custody recorded for one evidence item: an image's
-    MD5/SHA-1/SHA-256 (image hashing), a folder's manifest digest (ingest)."""
-    for row in reversed(rows):
-        if row.get("target") != evidence_id:
-            continue
-        h = row.get("hashes") or {}
-        if row.get("action") == "image.completed" and h.get("sha256"):
-            return (f"MD5 {_e(h.get('md5'))}<br>SHA-1 {_e(h.get('sha1'))}<br>"
-                    f"SHA-256 {_e(h.get('sha256'))}<br><span class=meta>image "
-                    f"hashed {_e(row.get('at'))}</span>")
-        if row.get("action") == "ingest.completed" and h.get("manifest"):
-            return (f"Manifest SHA-256 {_e(h.get('manifest'))}<br><span "
-                    f"class=meta>folder ingested {_e(row.get('at'))}</span>")
-    return ""
+    """The hashes custody FIRST recorded for one evidence item — an image's
+    MD5/SHA-1/SHA-256, a folder's manifest digest — and, in red, every later
+    record that disagrees: a re-hash that came out different, a verification
+    that found changed, missing or unreadable files. A report that showed
+    only the newest hash would hide that the evidence changed."""
+    image = [r for r in rows if r.get("target") == evidence_id
+             and r.get("action") == "image.completed"
+             and (r.get("hashes") or {}).get("sha256")]
+    ingest = [r for r in rows if r.get("target") == evidence_id
+              and r.get("action") == "ingest.completed"
+              and (r.get("hashes") or {}).get("manifest")]
+    verify = [r for r in rows if r.get("target") == evidence_id
+              and r.get("action") == "verify.completed"]
+    out = []
+    if image:
+        first = image[0]
+        h = first["hashes"]
+        out.append(f"MD5 {_e(h.get('md5'))}<br>SHA-1 {_e(h.get('sha1'))}<br>"
+                   f"SHA-256 {_e(h.get('sha256'))}<br><span class=meta>image "
+                   f"first hashed {_e(first.get('at'))}</span>")
+        for later in image[1:]:
+            lh = later["hashes"]
+            if lh.get("sha256") != h.get("sha256") or lh.get("md5") != h.get("md5"):
+                out.append(f"<span class=bad>A LATER HASHING DIFFERS "
+                           f"({_e(later.get('at'))}): SHA-256 "
+                           f"{_e(lh.get('sha256'))}</span>")
+    elif ingest:
+        first = ingest[0]
+        m = first["hashes"]["manifest"]
+        out.append(f"Manifest SHA-256 {_e(m)}<br><span class=meta>folder "
+                   f"first ingested {_e(first.get('at'))}</span>")
+        for later in ingest[1:]:
+            if later["hashes"]["manifest"] != m:
+                out.append(f"<span class=bad>A LATER INGEST DIFFERS "
+                           f"({_e(later.get('at'))}): manifest SHA-256 "
+                           f"{_e(later['hashes']['manifest'])}</span>")
+    for v in verify:
+        d = v.get("detail") or {}
+        bad = [f"{d[k]} {k}" for k in ("mismatched", "missing", "unreadable")
+               if d.get(k)]
+        if d.get("manifest_digest_matches") is False:
+            bad.append("the manifest digest does not match")
+        if bad:
+            out.append(f"<span class=bad>VERIFICATION {_e(v.get('at'))} FOUND "
+                       f"{_e(', '.join(bad))}</span>")
+        else:
+            out.append(f"<span class=meta>verified unchanged "
+                       f"{_e(v.get('at'))}</span>")
+    return "<br>".join(out)
 
 
 def _detail_html(f) -> str:
@@ -201,9 +245,12 @@ break-inside:avoid}}
 """
 
 
-def build_html(case, *, title: str = "", generated_by: str = "") -> tuple[str, dict]:
-    """(html, facts) — read-only: nothing is written here."""
-    findings = review.confirmed(case)
+def build_html(case, *, title: str = "", generated_by: str = "",
+               findings=None) -> tuple[str, dict]:
+    """(html, facts) — read-only: nothing is written here. `findings` (the
+    confirmed ones) is read here unless the caller already has it."""
+    if findings is None:
+        findings = review.confirmed(case)
     counts = review.counts(case)
     chain = case.custody.verify()
     head_n, head_hash = case.custody.head()
@@ -306,12 +353,15 @@ def generate(case, *, title: str = "", iocs_too: bool = True) -> dict:
     and recorded in custody. Returns the paths, hashes and facts."""
     stamp = utc_now()[:19].replace("-", "").replace(":", "")
     base = case.root / REPORTS_DIR / f"{case.info.case_id}-report-{stamp}Z"
-    text, facts = build_html(case, title=title)
+    # ONE list of confirmed findings for the report AND the export: a
+    # decision made in between cannot make the two disagree
+    findings = review.confirmed(case)
+    text, facts = build_html(case, title=title, findings=findings)
     written = {"html": {"path": os.fspath(base) + ".html",
                         **_write_case_file(case, Path(os.fspath(base) + ".html"),
                                            text.encode("utf-8"))}}
     if iocs_too:
-        rows = iocs(review.confirmed(case))
+        rows = iocs(findings)
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=["type", "value", "first_seen",
                                                  "last_seen", "context",
@@ -319,7 +369,7 @@ def generate(case, *, title: str = "", iocs_too: bool = True) -> dict:
                                                  "confirmed_by", "confirmed_at"],
                                 lineterminator="\r\n")
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows([{k: _csv_safe(v) for k, v in r.items()} for r in rows])
         written["iocs_csv"] = {"path": os.fspath(base) + "-iocs.csv",
                                **_write_case_file(case, Path(os.fspath(base) + "-iocs.csv"),
                                                   buf.getvalue().encode("utf-8-sig"))}
