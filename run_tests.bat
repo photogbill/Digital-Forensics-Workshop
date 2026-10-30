@@ -8,8 +8,9 @@ REM
 REM    run_tests.bat         engine + ATK's forensics tests (a few minutes)
 REM    run_tests.bat /all    ... and the whole ATK suite (much longer)
 REM
-REM  Nothing is written to C:\ or your profile. Hand the log to Claude if
-REM  anything fails.
+REM  The tests' scratch files go in test_tmp\ here and are deleted at the
+REM  end: nothing is written to C:\ or your profile. Hand the log to
+REM  Claude if anything fails.
 REM ============================================================================
 setlocal
 cd /d "%~dp0"

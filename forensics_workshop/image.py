@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 import re
 import string
+import queue
 import threading
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
@@ -430,6 +431,58 @@ class RegionFile:
         return True
 
 
+READ_AHEAD_BLOCK = 8 << 20
+
+
+def _read_ahead(fh, should_cancel=None, *, block: int = READ_AHEAD_BLOCK,
+                depth: int = 4):
+    """The file's blocks in order, read by a thread a few blocks AHEAD of
+    the caller — so the disk is reading the next block while the digests
+    run on this one, instead of one waiting for the other. Raises the
+    reader's error here; stops the reader when the caller stops."""
+    q: queue.Queue = queue.Queue(maxsize=depth)
+    stop = threading.Event()
+
+    def reader():
+        try:
+            while not stop.is_set():
+                data = fh.read(block)
+                while not stop.is_set():
+                    try:
+                        q.put(data, timeout=0.25)
+                        break
+                    except queue.Full:
+                        continue
+                if not data:
+                    return
+        except BaseException as exc:                      # noqa: BLE001
+            while not stop.is_set():
+                try:
+                    q.put(exc, timeout=0.25)
+                    return
+                except queue.Full:
+                    continue
+
+    thread = threading.Thread(target=reader, name="dfw-read-ahead", daemon=True)
+    thread.start()
+    try:
+        while True:
+            if should_cancel is not None and should_cancel():
+                raise Cancelled("image hashing was cancelled")
+            try:
+                item = q.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if isinstance(item, BaseException):
+                raise item
+            if not item:
+                return
+            yield item
+    finally:
+        stop.set()
+        thread.join(timeout=10)
+
+
 def hash_image(source: ImageSource, *, should_cancel=None,
                progress=None) -> tuple[Hashes, list[Hashes]]:
     """The whole disk's digests and each segment's, in one read.
@@ -451,12 +504,7 @@ def hash_image(source: ImageSource, *, should_cancel=None,
     for seg in source.info.segments:
         seg_hasher = whole if same else Hasher()
         with blocker.open_evidence(seg.path) as fh:
-            while True:
-                if should_cancel is not None and should_cancel():
-                    raise Cancelled("image hashing was cancelled")
-                chunk = fh.read(CHUNK)
-                if not chunk:
-                    break
+            for chunk in _read_ahead(fh, should_cancel):
                 if same:
                     room = source.size - whole.size
                     if len(chunk) > room:
@@ -495,9 +543,15 @@ def _hash_ewf(source: ImageSource, *, should_cancel=None, progress=None):
     reader. Each segment's digest still covers the physical .E0x file, so the
     evidence files' own integrity is recorded too.
     """
+    reader = getattr(source, "_ewf", None)
+    if reader is not None and hasattr(reader, "hash_pass"):
+        # ONE read of the evidence files (2026-10-30, Bill's bench: the two
+        # passes and chunk-at-a-time inflate gave 105 MB/s)
+        both = reader.hash_pass(should_cancel=should_cancel, progress=progress)
+        if both is not None:
+            return both
     whole = Hasher()
     pos = 0
-    reader = getattr(source, "_ewf", None)
     if reader is not None and hasattr(reader, "iter_stream"):
         # chunks inflated on worker threads, a window ahead, in order
         pending = bytearray()

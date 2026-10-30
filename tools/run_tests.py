@@ -14,6 +14,10 @@ folder; the screen gets one line per part and a total at the bottom. A part
 that cannot run (no ATK beside this folder, no pytest) says why and is
 counted as not run, never as passed.
 
+Scratch files go in test_tmp\ in this folder (TEMP/TMP/TMPDIR point
+there for the tests) and are deleted at the end — nothing on C:\ or in
+the user profile.
+
 Optional third-party samples (real registry hives, event logs, mailboxes,
 FAT images) are compared when DFW_SAMPLES names their folder; without it
 those tests skip and say so.
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -35,13 +40,30 @@ ATK_FORENSICS = ("test_dfw_workspace.py", "test_dfw_pages_build.py",
                  "test_cellular_page.py")
 
 
+def _env_python(root: Path) -> list[Path]:
+    return [p for p in (root / "envs" / "atk_core" / "Scripts" / "python.exe",
+                        root / "envs" / "atk_core" / "bin" / "python")
+            if p.is_file()]
+
+
+def atk_pythons() -> list[Path]:
+    """Pythons that can run ATK's tests, best first: ATK's own environment;
+    then an INSTALLED copy's environment beside it (ATK - Current_test, say —
+    used to run the tests and never written to: no bytecode, no cache, no
+    installs); then ATK's bare interpreter (.python), which has no Qt."""
+    out = _env_python(ATK)
+    for sibling in sorted(ROOT.parent.glob("ATK*")):
+        if sibling.is_dir() and sibling.resolve() != ATK.resolve():
+            out += _env_python(sibling)
+    bare = ATK / ".python" / "python.exe"
+    if bare.is_file():
+        out.append(bare)
+    return out
+
+
 def atk_python() -> Path | None:
-    for p in (ATK / "envs" / "atk_core" / "Scripts" / "python.exe",
-              ATK / "envs" / "atk_core" / "bin" / "python",
-              ATK / ".python" / "python.exe"):
-        if p.is_file():
-            return p
-    return None
+    found = atk_pythons()
+    return found[0] if found else None
 
 
 def has_pytest(py) -> str:
@@ -85,9 +107,13 @@ def run(label, argv, cwd, log, env) -> dict:
             m = re.search(rf"(\d+) {word}", text.splitlines()[-1] if text else "")
             if m:
                 out[key] = int(m.group(1))
-    failing = re.findall(r"^(?:FAIL|ERROR): (\S+ \(\S+\))", text, re.M) + \
-        re.findall(r"^FAILED (\S+)", text, re.M)
-    out["failing"] = failing[:20]
+    failing = re.findall(r"^(?:FAIL|ERROR): (\S+) \(", text, re.M) + \
+        re.findall(r"^FAILED (\S+::\S+)", text, re.M)
+    seen: list = []
+    for name in failing:                  # a sub-test fails once per case
+        if name not in seen:
+            seen.append(name)
+    out["failing"] = seen[:25]
     return out
 
 
@@ -96,34 +122,64 @@ def main(argv) -> int:
     logdir = ROOT / "logs" / "tests"
     logdir.mkdir(parents=True, exist_ok=True)
     log_path = logdir / f"tests_{time.strftime('%Y%m%d_%H%M%S')}.txt"
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    # Every scratch file the tests make (their temporary cases, images and
+    # folders) goes HERE, beside the code on D:, never to C:\ or the user
+    # profile (%TEMP% is under AppData): TEMP/TMP/TMPDIR point the tests'
+    # tempfile at test_tmp\, which is emptied before and after the run.
+    scratch = ROOT / "test_tmp"
+    shutil.rmtree(scratch, ignore_errors=True)
+    scratch.mkdir()
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", TEMP=str(scratch),
+               TMP=str(scratch), TMPDIR=str(scratch))
     results, notes = [], []
     print(f"Forensics tests — {time.strftime('%Y-%m-%d %H:%M')}")
     with open(log_path, "w", encoding="utf-8") as log:
         log.write(f"Python {sys.version}\nWorkshop: {ROOT}\nATK: {ATK}\n"
                   f"DFW_SAMPLES: {os.environ.get('DFW_SAMPLES') or '(not set)'}\n")
         results.append(run("1. Engine (Digital Forensics Workshop)",
-                           [sys.executable, "-m", "unittest", "discover", "-s",
-                            "tests", "-p", "test_*.py"], ROOT, log, env))
-        py = atk_python()
+                           [sys.executable, "-m", "unittest", "discover", "-v",
+                            "-s", "tests", "-p", "test_*.py"], ROOT, log, env))
+        candidates = atk_pythons()
+        py = next((c for c in candidates if not has_pytest(c)), None)
+        bare = ATK / ".python" / "python.exe"
+        if py is None and bare.is_file() and sys.stdin.isatty():
+            print("\n  ATK's tests need pytest, and no ATK Python here has it.")
+            print(f"  It can be added to ATK's own interpreter ({bare}) —")
+            print("  one download, MIT licensed, nothing else changes.")
+            answer = input("  Add pytest now? [Y/N] ").strip().lower()
+            if answer.startswith("y"):
+                r = subprocess.run([str(bare), "-m", "pip", "install", "pytest"],
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                log.write("\n$ pip install pytest\n"
+                          + r.stdout.decode("utf-8", "replace"))
+                if not has_pytest(bare):
+                    py = bare
+                    print("  pytest added.\n")
+                else:
+                    print("  pip could not add it — see the log.\n")
         if not ATK.is_dir():
             notes.append(f"ATK not found at {ATK}: its forensics tests were NOT run.")
+        elif not candidates:
+            notes.append("No ATK Python was found (envs\\atk_core or .python): "
+                         "run ATK's install.bat first. ATK's forensics tests were "
+                         "NOT run.")
         elif py is None:
-            notes.append("ATK's Python (envs\\atk_core) was not found: run ATK's "
-                         "install.bat first. ATK's forensics tests were NOT run.")
-        elif has_pytest(py):
-            notes.append(has_pytest(py) + " — ATK's forensics tests were NOT run.")
+            notes.append(has_pytest(candidates[-1]) + " — ATK's forensics tests "
+                         "were NOT run.")
         else:
+            log.write(f"\nATK's tests run with: {py}\n")
+            print(f"  (ATK's tests with {py})")
             tests = [f"tests/{n}" for n in ATK_FORENSICS if (ATK / "tests" / n).is_file()]
             results.append(run("2. ATK Digital Forensics workspace",
-                               [py, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                                *tests], ATK, log, env))
+                               [py, "-m", "pytest", "-q", "-rs", "-p",
+                                "no:cacheprovider", *tests], ATK, log, env))
             if everything:
                 results.append(run("3. ATK — the whole suite",
-                                   [py, "-m", "pytest", "-q", "-p",
+                                   [py, "-m", "pytest", "-q", "-rs", "-p",
                                     "no:cacheprovider", "tests"], ATK, log, env))
         for n in notes:
             log.write(f"\nNOTE: {n}\n")
+    shutil.rmtree(scratch, ignore_errors=True)
     print()
     total = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}
     for r in results:
@@ -147,7 +203,7 @@ def main(argv) -> int:
              "A PART ENDED WITH AN ERROR"))
     print(f"\n  Full output: {log_path}")
     print("  (Skipped tests need tools or samples this machine does not have; "
-          "the log names each one and why.)")
+          "the log names each one and why — search it for 'skipped'.)")
     return 0 if all_ok else 1
 
 

@@ -36,3 +36,4 @@ index.db
 # bench.bat (2026-10-29): its scratch folder and its reports
 /bench_tmp/
 /logs/
+/test_tmp/

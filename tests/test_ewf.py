@@ -128,7 +128,7 @@ class RoundTrip(TempDirCase):
 
     def test_both_storage_forms_were_exercised(self):
         with ewf.EwfImage([self.path]) as img:
-            forms = {c.compressed for c in img._chunks}
+            forms = {img._chunk(i).compressed for i in range(img.chunk_count)}
         self.assertEqual(forms, {True, False}, "need a compressed AND a raw chunk")
 
     def test_geometry_matches(self):

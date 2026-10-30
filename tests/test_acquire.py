@@ -110,8 +110,18 @@ class Imager(TempDirCase):
         for name, value in (("source_kind", "physical"),
                             ("disks_of_source", {"/dev/src"}),
                             ("disks_of_path", {"/dev/dst"}),
-                            ("list_drives", [])):
+                            ("list_drives", []),
+                            # Windows (first run there 2026-10-30): a raw read
+                            # needs Administrator, and the size comes from the
+                            # drive itself — the stand-in file answers both.
+                            ("is_elevated", True)):
             patcher = mock.patch.object(A, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for name, fn in (("_win_geometry",
+                          lambda s: (os.path.getsize(s), 512)),
+                         ("_win_length", lambda s: os.path.getsize(s))):
+            patcher = mock.patch.object(A, name, side_effect=fn)
             patcher.start()
             self.addCleanup(patcher.stop)
 

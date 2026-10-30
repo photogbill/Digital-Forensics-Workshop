@@ -116,13 +116,25 @@ optional comparisons.
 "Run everything" (`pipeline.py`) now also reads FAT/exFAT volumes and the
 Windows artefacts and mailboxes on every parsed volume.
 
-**Speed** — `bench.bat` measures the digests, E01 reading and every parser on
-this machine and saves the numbers in `logs\bench\`. On Bill's machine's
-Linux VM (two cores): the three digests side by side 565 MB/s (one after
-another 369); E01 inflate on threads 316 MB/s (one at a time 247); event
-logs about 4,000 records/s per core — the slowest parser, and the reason the
-parsing runs on every core. A single-file RAW image is now hashed once (it
-was hashed twice). No C accelerator yet: the numbers do not call for one.
+**Speed** — `bench.bat` measures the digests, E01 and RAW hashing and every
+parser on this machine and saves the numbers in `logs\bench\`. First run on
+Bill's Windows machine (20 threads, 2026-10-30): the three digests side by
+side 691 MB/s (one after another 427; MD5 alone 802 is the ceiling for one
+stream); event logs 4,780 records/s per core, parsed on every spare core.
+That run also showed E01 hashing at 105 MB/s — two reads of the evidence
+and one hand-off per 32 KiB chunk — so it was rebuilt the same night: ONE
+read of the segment files, the files' digests from the bytes as read,
+every chunk of an 8 MB block inflated by a worker thread straight out of
+that block, the disk's digests in order alongside (`EwfImage.hash_pass`);
+RAW images are read a few blocks ahead of the digests. Re-run on Bill's
+machine the same night: E01, all digests, 178 → 498 MB/s in one read (the
+first run's 105 MB/s was nearly 5× slower); threaded inflate 440 → 680 MB/s;
+RAW 464 → 600 MB/s, against a ceiling of 708 MB/s for the three digests —
+so on real evidence the drive's own read speed is the limit. **CUDA would not help here:** one
+MD5/SHA stream cannot be split across GPU cores, the evidence drive's own
+read speed is the real limit, and the parsers are branchy code GPUs are
+bad at; the GPU's work in the Workshop is the model hunts and the audio.
+No C accelerator: the numbers do not call for one.
 
 ## What the model hunts read — `corpus.py`
 

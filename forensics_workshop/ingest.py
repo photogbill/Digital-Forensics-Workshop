@@ -128,11 +128,16 @@ def _kind(st) -> str:
 def _base_row(evidence_id: str, relpath: str, kind: str, st) -> dict:
     attrs = getattr(st, "st_file_attributes", None)
     name = relpath.rsplit("/", 1)[-1]
+    # Hidden is either convention, whichever machine is doing the reading:
+    # the Windows hidden attribute, or a name starting with a dot (hidden on
+    # Linux and macOS, where much evidence comes from). First run on Windows,
+    # 2026-10-30: a dot-file was not counted there.
+    dotted = name.startswith(".") and name not in (".", "..")
     if attrs is not None:
-        hidden = int(bool(attrs & FILE_ATTRIBUTE_HIDDEN))
+        hidden = int(bool(attrs & FILE_ATTRIBUTE_HIDDEN) or dotted)
         system = int(bool(attrs & FILE_ATTRIBUTE_SYSTEM))
     else:
-        hidden, system = int(name.startswith(".")), 0
+        hidden, system = int(dotted), 0
     row = dict.fromkeys(FILE_COLUMNS)
     row.update(evidence_id=evidence_id, relpath=relpath, kind=kind,
                size=st.st_size if kind == "file" else None,

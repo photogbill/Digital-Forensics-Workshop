@@ -45,10 +45,12 @@ and declined until it is built.
 from __future__ import annotations
 
 import os
+import queue
 import struct
 import threading
 import zlib
-from collections import OrderedDict, deque
+from array import array
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -59,8 +61,12 @@ SIGNATURE = b"EVF\x09\x0d\x0a\xff\x00"
 DESC_SIZE = 76
 COMPRESSED = 0x80000000
 OFFSET_MASK = 0x7FFFFFFF
-MAX_ENTRIES = 1 << 24          # a sane cap: 16M chunks ≈ 512 GiB at 32 KiB
+MAX_ENTRIES = 1 << 24          # per table section; a sane cap
 CACHE_CHUNKS = 64              # decompressed chunks kept in memory
+#: one pass over the whole image (hashing it): the segment files are read in
+#: blocks of READ_BLOCK, and every chunk a block holds is inflated by one
+#: worker thread straight out of that block (no per-chunk copies)
+READ_BLOCK = 8 << 20
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,31 @@ class Geometry:
     @property
     def disk_size(self) -> int:
         return self.sector_count * self.bytes_per_sector
+
+
+def _decode_block(cs: int, size: int, data: bytes, specs: list) -> bytes:
+    """Every chunk one read block holds, inflated (on a worker thread) out
+    of that block without copying it first; the decoded disk bytes joined
+    once. Each chunk must decode to exactly its expected size."""
+    mv = memoryview(data)
+    parts = []
+    for index, rel, stored, compressed in specs:
+        expect = min(cs, size - index * cs)
+        if compressed:
+            try:
+                piece = zlib.decompress(mv[rel:rel + stored])
+            except zlib.error as exc:
+                raise EvidenceError(
+                    f"EWF chunk {index} did not decompress ({exc}); the image "
+                    "may be damaged or its table misread.") from exc
+        else:
+            piece = mv[rel:rel + min(stored, expect)]   # without its adler32
+        if len(piece) != expect:
+            raise EvidenceError(
+                f"EWF chunk {index} decoded to {len(piece)} bytes, expected "
+                f"{expect} — geometry and table disagree.")
+        parts.append(piece)
+    return b"".join(parts)
 
 
 @dataclass(frozen=True)
@@ -156,7 +187,12 @@ class EwfImage:
         self._cache: OrderedDict = OrderedDict()
         self._lock = threading.Lock()
         self.geometry: Geometry | None = None
-        self._chunks: list[_Chunk] = []
+        # The chunk table, kept compact: a 2 TB image at 32 KiB chunks has 64
+        # million chunks, which as Python objects would take gigabytes.
+        self._c_seg = array("I")
+        self._c_off = array("Q")
+        self._c_len = array("I")
+        self._c_comp = bytearray()
         self._index()
         if self.geometry is None:
             raise EvidenceError("EWF set has no volume/disk section.")
@@ -192,9 +228,20 @@ class EwfImage:
                 stored = sectors_end - start
             if stored <= 0:
                 raise EvidenceError(
-                    f"EWF chunk {len(self._chunks)} has a non-positive stored "
+                    f"EWF chunk {len(self._c_off)} has a non-positive stored "
                     "length — the table offsets are not understood.")
-            self._chunks.append(_Chunk(seg_index, start, stored, compressed))
+            self._c_seg.append(seg_index)
+            self._c_off.append(start)
+            self._c_len.append(stored)
+            self._c_comp.append(1 if compressed else 0)
+
+    def _chunk(self, index: int) -> _Chunk:
+        return _Chunk(self._c_seg[index], self._c_off[index],
+                      self._c_len[index], bool(self._c_comp[index]))
+
+    @property
+    def chunk_count(self) -> int:
+        return len(self._c_off)
 
     # -- reading -------------------------------------------------------------
 
@@ -215,7 +262,7 @@ class EwfImage:
         if cached is not None:
             self._cache.move_to_end(index)
             return cached
-        chunk = self._chunks[index]
+        chunk = self._chunk(index)
         fh = self._handle(chunk.segment)
         fh.seek(chunk.offset)
         raw = fh.read(chunk.stored)
@@ -255,49 +302,151 @@ class EwfImage:
                 out += data[lo:hi]
         return bytes(out)
 
-    def iter_stream(self, *, workers: int | None = None, should_cancel=None):
-        """Every chunk of the disk, decoded, IN ORDER — for one pass over the
-        whole image (hashing it). The compressed bytes are read here, one
-        after another; zlib inflates them on worker threads (it lets go of
-        the interpreter lock while it works), a window of chunks ahead, so a
-        multi-core machine decodes several at once. The checks are
-        `_chunk_bytes`' own: every chunk must decode to its expected size."""
-        n = workers or max(2, min(8, (os.cpu_count() or 2) - 1))
-        window: deque = deque()
-        cs = self._chunk_size
+    def _in_file_order(self) -> bool:
+        """Do the chunks lie in the segment files in disk order (segment by
+        segment, offsets rising)? Every writer we know of does this; a set
+        that does not is read chunk by chunk instead."""
+        last_seg, last_off = -1, -1
+        for s, o in zip(self._c_seg, self._c_off):
+            if s < last_seg or (s == last_seg and o < last_off):
+                return False
+            last_seg, last_off = s, o
+        return True
 
-        def decode(index, raw, compressed):
-            expect = min(cs, self.size - index * cs)
-            if compressed:
+    def _decoded(self, *, workers=None, should_cancel=None, segment_hashers=None):
+        """The whole disk, decoded, IN ORDER, a read block at a time — in ONE
+        read of the segment files.
+
+        A reader thread reads each segment file front to back in 8 MB blocks
+        (feeding `segment_hashers[i]`, when given, so the files' own digests
+        come out of the same read) and hands each block, with the chunks it
+        holds, to a worker thread; zlib inflates there straight out of the
+        block (it lets go of the interpreter lock while it works). The
+        decoded blocks come back here in order. Every chunk must decode to its
+        expected size, as in `_chunk_bytes`."""
+        from .errors import Cancelled
+        n = workers or max(2, min(12, (os.cpu_count() or 2) - 2))
+        cs, size, total = self._chunk_size, self.size, self.chunk_count
+        q: queue.Queue = queue.Queue(maxsize=2 * n)
+        stop = threading.Event()
+        pool = ThreadPoolExecutor(max_workers=n, thread_name_prefix="dfw-ewf-inflate")
+
+        def put(item) -> bool:
+            while not stop.is_set():
                 try:
-                    data = zlib.decompress(raw)
-                except zlib.error as exc:
-                    raise EvidenceError(
-                        f"EWF chunk {index} did not decompress ({exc}); the "
-                        "image may be damaged or its table misread.") from exc
-            else:
-                data = raw[:expect]
-            if len(data) != expect:
-                raise EvidenceError(
-                    f"EWF chunk {index} decoded to {len(data)} bytes, expected "
-                    f"{expect} — geometry and table disagree.")
-            return data
+                    q.put(item, timeout=0.25)
+                    return True
+                except queue.Full:
+                    continue
+            return False
 
-        with ThreadPoolExecutor(max_workers=n,
-                                thread_name_prefix="dfw-ewf-inflate") as pool:
-            for index, chunk in enumerate(self._chunks):
+        def reader() -> None:
+            try:
+                ci = 0
+                for s, path in enumerate(self.segments):
+                    hasher = segment_hashers[s] if segment_hashers else None
+                    with blocker.open_evidence(path) as fh:
+                        carry, base = b"", 0      # bytes not yet used, and where
+                        while not stop.is_set():
+                            block = fh.read(READ_BLOCK)
+                            if not block:
+                                break
+                            if hasher is not None:
+                                hasher.update(block)
+                            data = carry + block if carry else block
+                            end = base + len(data)
+                            specs = []
+                            while (ci < total and self._c_seg[ci] == s
+                                   and self._c_off[ci] + self._c_len[ci] <= end):
+                                specs.append((ci, self._c_off[ci] - base,
+                                              self._c_len[ci],
+                                              bool(self._c_comp[ci])))
+                                ci += 1
+                            if specs and not put(pool.submit(
+                                    _decode_block, cs, size, data, specs)):
+                                return
+                            nxt = (self._c_off[ci] if ci < total and
+                                   self._c_seg[ci] == s else end)
+                            if nxt < end:             # a chunk straddles the block
+                                carry, base = data[nxt - base:], nxt
+                            else:
+                                carry, base = b"", end
+                    if stop.is_set():
+                        return
+                    if ci < total and self._c_seg[ci] == s:
+                        raise EvidenceError(
+                            f"EWF chunk {ci} lies past the end of {path}; the "
+                            "segment is truncated.")
+                if ci != total:
+                    raise EvidenceError(
+                        f"Only {ci:,} of {total:,} EWF chunks were found in the "
+                        "segment files.")
+                put(None)
+            except BaseException as exc:                  # noqa: BLE001 — handed on
+                put(exc)
+
+        thread = threading.Thread(target=reader, name="dfw-ewf-reader", daemon=True)
+        thread.start()
+        try:
+            while True:
+                if should_cancel is not None and should_cancel():
+                    raise Cancelled("reading the image was cancelled")
+                try:
+                    item = q.get(timeout=0.25)
+                except queue.Empty:
+                    continue
+                if item is None:
+                    return
+                if isinstance(item, BaseException):
+                    raise item
+                yield item.result()
+        finally:
+            stop.set()
+            while True:                     # let a blocked reader finish
+                try:
+                    item = q.get_nowait()
+                except queue.Empty:
+                    break
+                if hasattr(item, "cancel"):
+                    item.cancel()
+            thread.join(timeout=10)
+            pool.shutdown(wait=True, cancel_futures=True)
+
+    def iter_stream(self, *, workers: int | None = None, should_cancel=None):
+        """Every byte of the disk, decoded, in order (blocks of about 1 MB) —
+        one pass, inflated on worker threads. Chunk by chunk when the set's
+        chunks are not in file order."""
+        if not self._in_file_order():
+            for index in range(self.chunk_count):
                 if should_cancel is not None and should_cancel():
                     from .errors import Cancelled
                     raise Cancelled("reading the image was cancelled")
                 with self._lock:
-                    fh = self._handle(chunk.segment)
-                    fh.seek(chunk.offset)
-                    raw = fh.read(chunk.stored)
-                window.append(pool.submit(decode, index, raw, chunk.compressed))
-                if len(window) >= 2 * n:
-                    yield window.popleft().result()
-            while window:
-                yield window.popleft().result()
+                    yield self._chunk_bytes(index)
+            return
+        yield from self._decoded(workers=workers, should_cancel=should_cancel)
+
+    def hash_pass(self, *, workers: int | None = None, should_cancel=None,
+                  progress=None):
+        """(the disk's Hashes, [each segment file's Hashes]) in ONE read of
+        the evidence: the segment files' digests from the bytes as read, the
+        disk's from the chunks inflated out of those same bytes. None when
+        the chunks are not in file order (the caller then reads twice)."""
+        from .hashing import Hasher
+        if not self._in_file_order():
+            return None
+        seg = [Hasher() for _ in self.segments]
+        whole = Hasher()
+        for data in self._decoded(workers=workers, should_cancel=should_cancel,
+                                  segment_hashers=seg):
+            whole.update(data)
+            if progress is not None and whole.size % (256 << 20) < len(data):
+                progress(f"hashed {whole.size:,} of {self.size:,} disk bytes")
+        if whole.size != self.size:
+            raise EvidenceError(
+                f"The E01's chunks decode to {whole.size:,} bytes, but its "
+                f"geometry says {self.size:,}.")
+        return whole.result(), [h.result() for h in seg]
 
     def close(self) -> None:
         with self._lock:
