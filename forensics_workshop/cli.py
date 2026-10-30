@@ -78,13 +78,17 @@ from . import acquire as _acquire
 from . import corpus as _corpus
 from . import diskimage as _disk
 from . import domex as _domex
+from . import fatcase as _fat
 from . import hunts as _hunts
 from . import pipeline as _pipeline
+from . import report as _report
 from . import review as _review
 from . import manifest as _manifest
 from . import verify as _verify
+from . import winartifacts as _win
 from .artefacts import browser as _browser
 from .artefacts import mobile as _mobile
+from .artefacts import query as _query
 from .media import restore as _restore
 from .media import voiceprint as _voice
 from .case import Case
@@ -227,6 +231,29 @@ def cmd_artefacts(args) -> int:
     return 0
 
 
+def cmd_rows(args) -> int:
+    """Every parser's rows, one table (the Artifacts page's query)."""
+    case = _open(args)
+    if args.parsers:
+        for name, n in _query.parsers(case, args.evidence):
+            kinds = ", ".join(f"{k} {c}" for k, c in
+                              _query.kinds(case, args.evidence, name))
+            print(f"{name:10} {n:>8}  {kinds}")
+        return 0
+    rows, total = _query.list_rows(case, args.evidence, parser=args.parser,
+                                   artefact=args.kind, geo_only=args.geo,
+                                   search=args.search, time_from=args.since,
+                                   time_to=args.until, limit=args.limit)
+    for r in rows:
+        g = _query.geo_of(r)
+        where = f" @{g['lat']:.5f},{g['lon']:.5f}" if g else ""
+        print(f"{r['at_utc'] or '(no time)':28} {r['parser']:9} "
+              f"{r['artefact']:12} {(r['title'] or '')[:40]:40} "
+              f"{r['value'] or ''}{where}".rstrip())
+    print(f"\n{len(rows)} shown of {total}")
+    return 0
+
+
 def cmd_custody(args) -> int:
     case = _open(args)
     for row in case.custody.rows()[-args.tail:]:
@@ -283,8 +310,61 @@ def cmd_ntfs(args) -> int:
     return 0 if summary.state == "completed" else 1
 
 
+def _is_fat(case, evidence_id, volume) -> bool:
+    """entries/entry/preview/recover serve NTFS and FAT/exFAT alike."""
+    try:
+        row = _disk.volume_row(case, evidence_id, volume)
+    except ForensicsError:
+        return False
+    return row.get("fs_type") in _fat.FAT_TYPES
+
+
+def cmd_fat(args) -> int:
+    case = _open(args)
+    summary = _fat.parse_fat(case, args.evidence, args.volume, progress=_progress)
+    _print(summary.as_dict())
+    return 0 if summary.state == "completed" else 1
+
+
+def cmd_windows(args) -> int:
+    case = _open(args)
+    kinds = [k.strip() for k in args.kinds.split(",") if k.strip()] \
+        or list(_win.DEFAULT_KINDS)
+    workers = None if args.workers < 0 else args.workers
+    if args.volume is None:
+        summary = _win.analyse_folder(case, args.evidence, kinds=kinds,
+                                      progress=_progress, workers=workers)
+    else:
+        summary = _win.analyse_volume(case, args.evidence, args.volume,
+                                      kinds=kinds, progress=_progress,
+                                      workers=workers)
+    _print(summary.as_dict())
+    return 0 if summary.state == "completed" else 1
+
+
+def _fat_entries(case, args) -> int:
+    filt = args.filter if args.filter in _fat.ENTRY_FILTERS else "all"
+    rows, total = _fat.list_fat_entries(case, args.evidence, args.volume,
+                                        filter=filt, search=args.search,
+                                        limit=args.limit)
+    for r in rows:
+        state = "D" if r["deleted"] else " "
+        state += "H" if r["past_end_marker"] else " "
+        size = "" if r["is_dir"] else f"{r['size']:,}"
+        when = r["modified_value"] or ""
+        if r["modified_epoch"] in ("fat-local", "exfat-local") and when:
+            when += " (local)"
+        print(f"{state} {r['entry_id']:>8} {size:>14}  {when:30} {r['path']}"
+              + (f"   [{r['recovery_basis']}]" if r["deleted"] else ""))
+    print(f"\n{len(rows)} shown of {total}   (D deleted · H after the "
+          "end-of-directory marker · FAT times are local, no zone)")
+    return 0
+
+
 def cmd_entries(args) -> int:
     case = _open(args)
+    if _is_fat(case, args.evidence, args.volume):
+        return _fat_entries(case, args)
     rows, total = _disk.list_entries(case, args.evidence, args.volume,
                                      filter=args.filter, search=args.search,
                                      limit=args.limit)
@@ -302,12 +382,18 @@ def cmd_entries(args) -> int:
 
 def cmd_entry(args) -> int:
     case = _open(args)
+    if _is_fat(case, args.evidence, args.volume):
+        _print(_fat.fat_entry_detail(case, args.evidence, args.volume, args.record))
+        return 0
     _print(_disk.entry_detail(case, args.evidence, args.volume, args.record))
     return 0
 
 
 def cmd_preview(args) -> int:
     case = _open(args)
+    if _is_fat(case, args.evidence, args.volume):
+        return _show_preview(_fat.preview_fat_entry(
+            case, args.evidence, args.volume, args.record, limit=args.bytes))
     out = _disk.preview_entry(case, args.evidence, args.volume, args.record,
                               args.stream, limit=args.bytes)
     return _show_preview(out)
@@ -329,6 +415,10 @@ def _show_preview(out: dict) -> int:
 
 def cmd_recover(args) -> int:
     case = _open(args)
+    if _is_fat(case, args.evidence, args.volume):
+        _print(_fat.recover_fat_entry(case, args.evidence, args.volume,
+                                      args.record, reason=args.reason).as_dict())
+        return 0
     _print(_disk.recover_entry(case, args.evidence, args.volume, args.record,
                                args.stream, reason=args.reason).as_dict())
     return 0
@@ -486,6 +576,13 @@ def cmd_confirm(args) -> int:
 def cmd_reject(args) -> int:
     case = _open(args)
     _print(_review.decide(case, args.finding, "rejected", note=args.note))
+    return 0
+
+
+def cmd_report(args) -> int:
+    case = _open(args)
+    out = _report.generate(case, title=args.title, iocs_too=not args.no_iocs)
+    _print(out)
     return 0
 
 
@@ -788,13 +885,28 @@ def build_parser() -> argparse.ArgumentParser:
                    evidence=True)
     nt.add_argument("--volume", type=int, required=True)
     nt.add_argument("--no-journal", action="store_true")
-    en = with_case("entries", cmd_entries, "list parsed MFT entries",
+    ft = with_case("fat", cmd_fat, "read every directory of a FAT/exFAT "
+                   "volume, deleted entries included", evidence=True)
+    ft.add_argument("--volume", type=int, required=True)
+    wn = with_case("windows", cmd_windows, "read the registry, shortcuts, "
+                   "Jump Lists, Prefetch, event logs and PST/OST mailboxes on a "
+                   "parsed volume (--volume) or an ingested folder (no --volume)",
                    evidence=True)
+    wn.add_argument("--volume", type=int, default=None)
+    wn.add_argument("--workers", type=int, default=-1,
+                    help="parsing processes (default: every core but two; 0 = "
+                         "one core)")
+    wn.add_argument("--kinds", default="",
+                    help=f"comma-separated, from {', '.join(_win.KINDS)}")
+    en = with_case("entries", cmd_entries, "list parsed entries (NTFS MFT "
+                   "records, or FAT/exFAT directory entries)", evidence=True)
     en.add_argument("--volume", type=int, required=True)
-    en.add_argument("--filter", default="all", choices=_disk.ENTRY_FILTERS)
+    en.add_argument("--filter", default="all",
+                    choices=sorted(set(_disk.ENTRY_FILTERS) | set(_fat.ENTRY_FILTERS)))
     en.add_argument("--search", default="")
     en.add_argument("--limit", type=int, default=200)
-    ed = with_case("entry", cmd_entry, "everything one MFT record says",
+    ed = with_case("entry", cmd_entry, "everything one MFT record (or, on "
+                   "FAT, one directory entry — its id from entries) says",
                    evidence=True)
     ed.add_argument("--volume", type=int, required=True)
     ed.add_argument("--record", type=int, required=True)
@@ -894,6 +1006,27 @@ def build_parser() -> argparse.ArgumentParser:
     rj = with_case("reject", cmd_reject, "reject a finding (a custodial act)")
     rj.add_argument("finding")
     rj.add_argument("--note", default="")
+    rw = sub.add_parser("rows", help="every parser's rows in one table "
+                        "(documents, pictures, browsers, phones, Windows "
+                        "artefacts, mail)")
+    rw.add_argument("case")
+    rw.add_argument("--examiner", required=True)
+    rw.add_argument("--evidence", default="")
+    rw.add_argument("--parser", default="")
+    rw.add_argument("--kind", default="")
+    rw.add_argument("--geo", action="store_true",
+                    help="only rows that state a GPS position")
+    rw.add_argument("--search", default="")
+    rw.add_argument("--since", default="", help="UTC, e.g. 2026-07-01")
+    rw.add_argument("--until", default="", help="UTC, e.g. 2026-07-31~")
+    rw.add_argument("--limit", type=int, default=200)
+    rw.add_argument("--parsers", action="store_true",
+                    help="list the parsers and kinds that have rows")
+    rw.set_defaults(fn=cmd_rows)
+    rp = with_case("report", cmd_report, "write the case report (confirmed "
+                   "findings only) and the IOC export into the case")
+    rp.add_argument("--title", default="")
+    rp.add_argument("--no-iocs", action="store_true")
 
 
     def voice_runtime(sp):

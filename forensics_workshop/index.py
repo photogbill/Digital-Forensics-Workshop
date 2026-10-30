@@ -25,7 +25,7 @@ from pathlib import Path
 from . import blocker
 
 FILENAME = "index.db"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BUSY_TIMEOUT_S = 30.0
 
 SCHEMA = """
@@ -236,6 +236,45 @@ CREATE TABLE IF NOT EXISTS carve_candidates (
     nested_in       INTEGER
 );
 CREATE INDEX IF NOT EXISTS carve_by_run ON carve_candidates (evidence_id, run_id, offset);
+-- schema 3: FAT12/16/32 and exFAT directories (2026-10-29) -------------------
+-- One row per directory entry (exFAT: entry set), live and deleted, as
+-- fat.py read it. Times are kept RAW with their epoch: a FAT time is the
+-- writing machine's LOCAL time with no zone, so its decoded value is a
+-- naive string, never UTC; exFAT's is UTC only where its offset was valid.
+CREATE TABLE IF NOT EXISTS fat_entries (
+    evidence_id     TEXT NOT NULL,
+    volume          INTEGER NOT NULL,
+    entry_id        INTEGER NOT NULL,  -- walk order; stable for one image
+    fs              TEXT,              -- FAT12 | FAT16 | FAT32 | exFAT
+    path            TEXT,
+    name            TEXT,
+    is_dir          INTEGER,
+    deleted         INTEGER,
+    in_deleted_dir  INTEGER,
+    past_end_marker INTEGER,
+    size            INTEGER,
+    first_cluster   INTEGER,
+    attributes      INTEGER,
+    modified_raw    INTEGER,
+    modified_epoch  TEXT,
+    modified_value  TEXT,
+    created_raw     INTEGER,
+    created_epoch   TEXT,
+    created_value   TEXT,
+    accessed_raw    INTEGER,
+    accessed_epoch  TEXT,
+    accessed_value  TEXT,
+    dir_entry_offset INTEGER,          -- bytes from the start of the VOLUME
+    slot_hex        TEXT,              -- the 32-byte short (exFAT: file) slot
+    recovery_basis  TEXT,
+    clusters        INTEGER,
+    clusters_now_allocated INTEGER,
+    problems        TEXT,              -- JSON list
+    detail_json     TEXT,              -- FatEntry.as_dict(), chain included
+    run_id          TEXT,
+    PRIMARY KEY (evidence_id, volume, entry_id)
+);
+CREATE INDEX IF NOT EXISTS fat_entries_path ON fat_entries (evidence_id, volume, path);
 CREATE TABLE IF NOT EXISTS slack_regions (
     evidence_id     TEXT NOT NULL,
     volume          INTEGER NOT NULL,

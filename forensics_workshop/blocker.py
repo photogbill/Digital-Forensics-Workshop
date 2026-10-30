@@ -137,6 +137,7 @@ WRITERS = {
     "media.lab:_harness_log": "harness",
     "media.lab:_harness_json": "harness",
     "media.proc:run_process": "spawn",
+    "parallel:_start_worker": "spawn",
     "media.proc:probe_version": "spawn",
     "media.voiceprint:make_scratch": "runtime-scratch",
     "media.voiceprint:_write_calibration": "calibration",

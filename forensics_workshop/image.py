@@ -40,7 +40,7 @@ from pathlib import Path
 
 from . import blocker, ewf, filetype
 from .errors import Cancelled, EvidenceError
-from .hashing import CHUNK, Hasher, Hashes
+from .hashing import CHUNK, Hasher, Hashes, update_all
 
 #: Signatures of containers that are not raw disks, and why each is refused.
 #: E01/EWF is NOT here — it is read natively (see `ewf.py`). Ex01 still is.
@@ -443,8 +443,13 @@ def hash_image(source: ImageSource, *, should_cancel=None,
     whole = Hasher()
     per_segment: list[Hashes] = []
     done = 0
+    # One file that IS the disk (a .dd, an .img): its digest and the disk's
+    # are the same bytes, so they are computed once (2026-10-29 — before,
+    # every byte of a single-file image was hashed twice).
+    same = (len(source.info.segments) == 1
+            and source.info.file_bytes == source.size)
     for seg in source.info.segments:
-        seg_hasher = Hasher()
+        seg_hasher = whole if same else Hasher()
         with blocker.open_evidence(seg.path) as fh:
             while True:
                 if should_cancel is not None and should_cancel():
@@ -452,10 +457,19 @@ def hash_image(source: ImageSource, *, should_cancel=None,
                 chunk = fh.read(CHUNK)
                 if not chunk:
                     break
-                seg_hasher.update(chunk)
+                if same:
+                    whole.update(chunk)
+                    done += len(chunk)
+                    if progress is not None and done % (256 * CHUNK) < CHUNK:
+                        progress(f"hashed {done:,} of {source.info.file_bytes:,} bytes")
+                    continue
                 disk_room = source.size - whole.size
-                if disk_room > 0:
-                    whole.update(chunk[:disk_room])
+                if disk_room >= len(chunk):
+                    update_all((seg_hasher, whole), chunk)
+                else:
+                    seg_hasher.update(chunk)
+                    if disk_room > 0:
+                        whole.update(chunk[:disk_room])
                 done += len(chunk)
                 if progress is not None and done % (256 * CHUNK) < CHUNK:
                     progress(f"hashed {done:,} of {source.info.file_bytes:,} bytes")
@@ -471,6 +485,21 @@ def _hash_ewf(source: ImageSource, *, should_cancel=None, progress=None):
     """
     whole = Hasher()
     pos = 0
+    reader = getattr(source, "_ewf", None)
+    if reader is not None and hasattr(reader, "iter_stream"):
+        # chunks inflated on worker threads, a window ahead, in order
+        pending = bytearray()
+        for data in reader.iter_stream(should_cancel=should_cancel):
+            pending += data
+            if len(pending) >= CHUNK:
+                whole.update(bytes(pending))
+                pos += len(pending)
+                pending.clear()
+                if progress is not None and pos % (256 * CHUNK) < CHUNK:
+                    progress(f"hashed {pos:,} of {source.size:,} disk bytes")
+        if pending:
+            whole.update(bytes(pending))
+            pos += len(pending)
     while pos < source.size:
         if should_cancel is not None and should_cancel():
             raise Cancelled("image hashing was cancelled")

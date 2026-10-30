@@ -2262,33 +2262,48 @@ all**, starting with the hunts and a drive imager (both done 2026-10-29).
 |---|---|---|---|
 | acquisition | FTK Imager | **built**: E01/RAW, verified, custody | AD1 and Ex01 output; RAM capture is out (licence-free route needed) |
 | image formats in | E01, Ex01, AD1, AFF/AFF4, SMART, VMDK, VHD(X) | RAW/split, E01, fixed VHD | **AD1** (FTK's own logical image) and **Ex01**, then VHDX/VMDK (native, §1.1) |
-| file systems | NTFS, FAT/exFAT, HFS+, APFS, ext | NTFS | **FAT/exFAT directories** first (every SD card and thumb drive), then ext4, HFS+; APFS via pyfsapfs |
-| Windows artifacts | registry viewer, LNK, prefetch, jump lists, event logs, shellbags, VSS | none | **registry hives** (+ Amcache/Shimcache/shellbags/USB history), **LNK + Jump Lists**, **Prefetch**, **EVTX event logs** (not in Phase 4 as first written — added here), SRUM/ESE, then VSS |
+| file systems | NTFS, FAT/exFAT, HFS+, APFS, ext | NTFS; **FAT12/16/32 and exFAT, built 2026-10-29** (deleted entries and folders, hidden-after-end-marker entries) | ext4, HFS+; APFS via pyfsapfs |
+| Windows artifacts | registry viewer, LNK, prefetch, jump lists, event logs, shellbags, VSS | **built 2026-10-29**: registry hives (+ Amcache, ShimCache, shellbags, USB history, logs replayed, deleted keys), LNK + Jump Lists, Prefetch (Win10 MAM in pure Python), EVTX (records recovered from slack) — on NTFS, FAT or an ingested triage folder, parsed on every core | a registry browser page; SRUM/ESE; then VSS |
 | full-text search | dtSearch index | hunts over parsed rows; model text hunts read bodies in memory | a **full-text index** in the case's index.db with SQLite FTS5 (stdlib), fed by the same text extraction, searchable from a page |
 | known files | KFF / NSRL | known-bad SHA-256 list | **known-good filtering** (NSRL RDS or any hash set) to hide OS and program files |
-| e-mail | PST/OST, NSF, EDB, MBOX | EML, mbox | **PST/OST** native (the format is documented), then MSG |
+| e-mail | PST/OST, NSF, EDB, MBOX | EML, mbox; **PST/OST built 2026-10-29** (all layouts and encodings, attachments, embedded messages) | a mailbox page (open a message, export an attachment with a reason); MSG; deleted-item recovery |
 | decryption | BitLocker, EFS, PRTK/DNA | detects BitLocker/LUKS | a decision for Bill: decryption needs a permitted crypto dependency (§1, §9.1) |
-| mobile | built-in parsing | iOS backups (CLI) | the Mobile page; iOS 12+ `attributedBody`; Android (§9) |
+| mobile | built-in parsing | iOS backups — **the Mobile page, built 2026-10-29** | iOS 12+ `attributedBody`; Android (§9) |
 | memory | memory analysis | deferred | still deferred: no licence-permitted route (§5, Phase 5) |
 | AI triage | EID, AI multimedia search, NLP search | **built**: model hunts over pictures, video frames, text; translation | OCR of scanned pages and pictures into the text hunts; transcripts (Whisper) into the text hunts |
-| reporting | case reports | none (`reports/` is empty) | **report generator** over CONFIRMED findings only, saying which sentences came from a model; CSV/JSON IOC export |
-| scale | distributed processing, DB backend | pure Python, one job per page | measure on a real 1-2 TB image first; then parallel parsing where it pays |
+| reporting | case reports | **built 2026-10-29**: one HTML report of CONFIRMED findings only, each marked engine or model with the model's words quoted; CSV/JSON IOC export (cards masked); hashed, in custody | a super-timeline section; a Word export if asked for |
+| scale | distributed processing, DB backend | pure Python; **2026-10-29**: the three digests side by side, E01 chunks inflated on threads, a single-file RAW image hashed once (it was twice), artefact parsing on every spare core (`parallel.py`); `bench.bat` measures it all on the machine | measure on a real 1-2 TB image; a C accelerator only where `bench.bat` says Python is the limit (none does yet) |
 | validation | years of court use, NIST CFTT | field-proven: none yet | a test-image set with known answers (NIST CFReDS, the Belka CTF images), results compared with Autopsy/FTK where available, written up per release |
 
 **Build order** (most case value per hour first; each its own increment, each
 with its own tests and a page or a button — Bill does not live at the command
 line):
 
-1. Pages for what is already built: DOMEX rows (with the GPS map hand-off), the
-   change-journal table, the mobile page.
-2. FAT/exFAT directories, deleted entries included.
-3. Windows artifacts: registry hives (and what lives in them), LNK + Jump
-   Lists, Prefetch (Win10 MAM via `RtlDecompressBufferEx`), EVTX.
-4. Report generator (confirmed findings only) and IOC export.
-5. PST/OST.
+1. ✓ (2026-10-29) Pages for what is already built: the Artifacts page (every
+   parser's rows; GPS rows to ATK's map, labelled as positions the files
+   report), the Change Journal page, the Mobile page.
+2. ✓ (2026-10-29) FAT/exFAT directories, deleted entries included — on the
+   Disk Image page beside NTFS, and in "Run everything".
+3. ✓ (2026-10-29) Windows artifacts: registry hives (and what lives in them),
+   LNK + Jump Lists, Prefetch (Win10 MAM decoded in pure Python; Windows' own
+   `RtlDecompressBufferEx` kept as a cross-check, not yet run on Windows),
+   EVTX.
+4. ✓ (2026-10-29) Report generator (confirmed findings only) and IOC export.
+5. ✓ (2026-10-29) PST/OST (rows; a page to open a message and export an
+   attachment is still to come).
 6. Known-good hash filtering (NSRL or any set).
 7. AD1 and Ex01 readers; AD1 output.
 8. Full-text index (FTS5) and its search page; OCR into it.
 9. Super timeline across everything above (Phase 4).
 10. Volume Shadow Copies; ext4; HFS+; APFS (library).
 11. The validation set and its write-up.
+
+**Not yet proven (2026-10-29), said plainly:** every parser above was checked
+against independent readers on REAL files from public test collections, but
+none has yet met a disk image from Bill's own Windows machines, and the
+whole Workshop has still not been run on Windows. ANSI PSTs and multi-block
+heaps in 4 KB OSTs are covered only by files the suite builds. The FAT
+reader's deleted-file content rests on the contiguous assumption every FAT
+tool makes. The registry's log replay disagrees with regipy's (ours yields
+hives hivex can walk; regipy's do not) and there is no third reader to
+settle it.

@@ -44,10 +44,12 @@ and declined until it is built.
 
 from __future__ import annotations
 
+import os
 import struct
 import threading
 import zlib
-from collections import OrderedDict
+from collections import OrderedDict, deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from . import blocker
@@ -252,6 +254,50 @@ class EwfImage:
                 hi = end - base if ci == (end - 1) // cs else len(data)
                 out += data[lo:hi]
         return bytes(out)
+
+    def iter_stream(self, *, workers: int | None = None, should_cancel=None):
+        """Every chunk of the disk, decoded, IN ORDER — for one pass over the
+        whole image (hashing it). The compressed bytes are read here, one
+        after another; zlib inflates them on worker threads (it lets go of
+        the interpreter lock while it works), a window of chunks ahead, so a
+        multi-core machine decodes several at once. The checks are
+        `_chunk_bytes`' own: every chunk must decode to its expected size."""
+        n = workers or max(2, min(8, (os.cpu_count() or 2) - 1))
+        window: deque = deque()
+        cs = self._chunk_size
+
+        def decode(index, raw, compressed):
+            expect = min(cs, self.size - index * cs)
+            if compressed:
+                try:
+                    data = zlib.decompress(raw)
+                except zlib.error as exc:
+                    raise EvidenceError(
+                        f"EWF chunk {index} did not decompress ({exc}); the "
+                        "image may be damaged or its table misread.") from exc
+            else:
+                data = raw[:expect]
+            if len(data) != expect:
+                raise EvidenceError(
+                    f"EWF chunk {index} decoded to {len(data)} bytes, expected "
+                    f"{expect} — geometry and table disagree.")
+            return data
+
+        with ThreadPoolExecutor(max_workers=n,
+                                thread_name_prefix="dfw-ewf-inflate") as pool:
+            for index, chunk in enumerate(self._chunks):
+                if should_cancel is not None and should_cancel():
+                    from .errors import Cancelled
+                    raise Cancelled("reading the image was cancelled")
+                with self._lock:
+                    fh = self._handle(chunk.segment)
+                    fh.seek(chunk.offset)
+                    raw = fh.read(chunk.stored)
+                window.append(pool.submit(decode, index, raw, chunk.compressed))
+                if len(window) >= 2 * n:
+                    yield window.popleft().result()
+            while window:
+                yield window.popleft().result()
 
     def close(self) -> None:
         with self._lock:

@@ -32,3 +32,7 @@ index.db
 
 # a session's commit message for the commit-msg hook (tools\commit_message.py in ATK)
 .git-commit-message.txt
+
+# bench.bat (2026-10-29): its scratch folder and its reports
+/bench_tmp/
+/logs/

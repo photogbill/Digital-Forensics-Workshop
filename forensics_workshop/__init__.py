@@ -25,7 +25,7 @@ and testable in a bare interpreter — and what keeps it inside Bill's licence
 rule, nothing that restricts commercial use (FORENSICS_PLAN.md §1.1).
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 #: Which phase of FORENSICS_PLAN.md this tree implements.
 PHASE = 2

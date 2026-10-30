@@ -48,6 +48,18 @@ class SplitImages(TempDirCase):
         self.assertEqual(whole.sha256, hashlib.sha256(disk).hexdigest())
         self.assertEqual([h.size for h in per], [4096, 4096, 2048])
 
+    def test_a_single_file_image_is_hashed_once_and_both_digests_agree(self):
+        import hashlib
+        import os as _os
+        disk = _os.urandom(3 << 20)                 # crosses the parallel threshold
+        path = self.tmp / "one.dd"
+        path.write_bytes(disk)
+        with image.ImageSource.open(path) as src:
+            whole, per = image.hash_image(src)
+        self.assertEqual(whole.sha256, hashlib.sha256(disk).hexdigest())
+        self.assertEqual(whole.md5, hashlib.md5(disk).hexdigest())
+        self.assertTrue(per[0].matches(whole))
+
     def test_lettered_segments(self):
         disk = b"x" * 3000
         paths = self._split(disk, ["img.aa", "img.ab"], 2000)

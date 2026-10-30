@@ -23,6 +23,44 @@ from _support import PACKAGE
 
 #: public function -> why no surface in THIS repository reaches it
 BY_DESIGN = {
+    "parallel:child_main":
+        "runs in each parsing worker, started by the text of parallel._BOOT "
+        "— a reach a syntax walk cannot follow",
+    "pst:Pst.embedded_message":
+        "the mailbox reader's own API, used by its tests; a mailbox page "
+        "(open a message, export an attachment into the case) is to come",
+    "pst:Pst.iter_block_entries":
+        "the mailbox reader's own API, used by its tests; a mailbox page "
+        "(open a message, export an attachment into the case) is to come",
+    "pst:Pst.iter_messages":
+        "the mailbox reader's own API, used by its tests; a mailbox page "
+        "(open a message, export an attachment into the case) is to come",
+    "pst:Pst.node_bytes":
+        "the mailbox reader's own API, used by its tests; a mailbox page "
+        "(open a message, export an attachment into the case) is to come",
+    "pst:Pst.node_census":
+        "the mailbox reader's own API, used by its tests; a mailbox page "
+        "(open a message, export an attachment into the case) is to come",
+    "pst:Pst.node_tc":
+        "the mailbox reader's own API, used by its tests; a mailbox page "
+        "(open a message, export an attachment into the case) is to come",
+    "pst:Pst.read_attachment":
+        "the mailbox reader's own API, used by its tests; a mailbox page "
+        "(open a message, export an attachment into the case) is to come",
+    "pst:encode_permute":
+        "the mailbox reader's own API, used by its tests; a mailbox page "
+        "(open a message, export an attachment into the case) is to come",
+    "pst:heap_from_bytes":
+        "the mailbox reader's own API, used by its tests; a mailbox page "
+        "(open a message, export an attachment into the case) is to come",
+    "prefetch:native_cross_check":
+        "a validation hook: compares the pure-Python MAM decompressor with "
+        "Windows' own RtlDecompressBufferEx; run by test_prefetch on Windows",
+    "registry:Hive.key_at":
+        "a reader's API (a key by its cell offset) for tests and a future "
+        "registry-browser page",
+    "registry:Hive.key_count":
+        "a reader's API for tests and a future registry-browser page",
     "caseindex:CaseIndex.remember":
         "ATK's case list; the command line keeps no index of cases",
     "caseindex:CaseIndex.forget":
@@ -30,15 +68,10 @@ BY_DESIGN = {
     "ratchet:scan_package": "a build-time guard, run by the test suites",
     "ratchet:scan_source": "a build-time guard, run by the test suites",
     "timeutil:from_ns": "for a host rendering stat nanoseconds (ATK's pages)",
-    "image:RegionFile.readable":
-        "the file-object protocol; called by zipfile inside the stdlib",
     "image:RegionFile.seekable":
         "the file-object protocol; called by zipfile inside the stdlib",
     "image:RegionFile.tell":
         "the file-object protocol; called by zipfile inside the stdlib",
-    "review:confirmed":
-        "the admitted-findings view the report and contact graph will read; "
-        "neither surface is built yet (FORENSICS_PLAN §10)",
     "corpus:read_item":
         "ATK's model hunts read an item's bytes into memory; the command "
         "line has no model to hand them to (corpus lists what they would read)",

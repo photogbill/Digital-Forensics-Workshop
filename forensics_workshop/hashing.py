@@ -6,6 +6,15 @@ one worth trusting, MD5 and SHA-1 are the ones older reports, hash sets and
 other examiners' tools will quote back. Computing them in a single read
 means asking for a legacy hash never costs a second pass over a 40 GB file.
 
+**THE THREE RUN SIDE BY SIDE** (2026-10-29). Python's hashlib lets go of
+the interpreter lock while it digests a buffer, so for a big chunk the
+three digests are computed on three threads at once and the chunk costs
+the slowest of them, not the sum. Measured on Bill's machine (its Linux
+VM, two cores): 350 MB/s one after another, 556 MB/s side by side — MD5
+is then the limit. Each digest still sees every chunk in order: an update
+waits for all three before the next chunk is fed. Small chunks are hashed
+in line, where a thread hand-off would cost more than it saves.
+
 **MD5 and SHA-1 are identifiers here, not security.** They are constructed
 with `usedforsecurity=False`, which is both the truth and what lets this
 module run on an interpreter built in FIPS mode.
@@ -14,6 +23,8 @@ module run on an interpreter built in FIPS mode.
 from __future__ import annotations
 
 import hashlib
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from typing import BinaryIO, Callable
 
@@ -22,6 +33,20 @@ from .errors import Cancelled
 
 CHUNK = 1 << 20
 ALGORITHMS = ("md5", "sha1", "sha256")
+#: a chunk at least this big is hashed on three threads at once
+PARALLEL_MIN = 256 << 10
+
+_POOL: ThreadPoolExecutor | None = None
+_POOL_LOCK = threading.Lock()
+
+
+def _pool() -> ThreadPoolExecutor:
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            _POOL = ThreadPoolExecutor(max_workers=6,
+                                       thread_name_prefix="dfw-digest")
+        return _POOL
 
 
 def _hashers():
@@ -43,14 +68,38 @@ class Hasher:
         self.size = 0
 
     def update(self, chunk: bytes) -> None:
-        self._md5.update(chunk)
-        self._sha1.update(chunk)
-        self._sha256.update(chunk)
+        if len(chunk) >= PARALLEL_MIN:
+            pool = _pool()
+            done = [pool.submit(h.update, chunk)
+                    for h in (self._md5, self._sha1, self._sha256)]
+            for f in done:
+                f.result()
+        else:
+            self._md5.update(chunk)
+            self._sha1.update(chunk)
+            self._sha256.update(chunk)
         self.size += len(chunk)
+
+    def digests(self) -> tuple:
+        return self._md5, self._sha1, self._sha256
 
     def result(self) -> "Hashes":
         return Hashes(self._md5.hexdigest(), self._sha1.hexdigest(),
                       self._sha256.hexdigest(), self.size)
+
+
+def update_all(hashers, chunk: bytes) -> None:
+    """Feed one chunk to several Hashers at once — a split image's segment
+    and the whole disk, say — every digest of every one side by side."""
+    if len(hashers) == 1:
+        hashers[0].update(chunk)
+        return
+    pool = _pool()
+    done = [pool.submit(d.update, chunk) for h in hashers for d in h.digests()]
+    for f in done:
+        f.result()
+    for h in hashers:
+        h.size += len(chunk)
 
 
 @dataclass(frozen=True)
@@ -98,11 +147,9 @@ def hash_stream(fh: BinaryIO, *, head_bytes: int = 0,
 
 
 def hash_bytes(data: bytes) -> Hashes:
-    md5, sha1, sha256 = _hashers()
-    for h in (md5, sha1, sha256):
-        h.update(data)
-    return Hashes(md5.hexdigest(), sha1.hexdigest(), sha256.hexdigest(),
-                  len(data))
+    hasher = Hasher()
+    hasher.update(data)
+    return hasher.result()
 
 
 def hash_evidence(path, *, should_cancel=None) -> Hashes:

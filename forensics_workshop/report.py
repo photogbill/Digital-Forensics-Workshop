@@ -23,8 +23,9 @@ its head hash, and the limits every examiner should state.
 
 **THE IOC EXPORT** (CSV and JSON) lists what confirmed findings name as
 indicators: e-mail and IP addresses, phone numbers, cryptocurrency addresses,
-known-bad SHA-256s, card numbers MASKED to their last four (a report is
-shared; a full card number in it is a second disclosure). STIX is not
+known-bad SHA-256s, and card numbers MASKED to their last four (an IOC
+list is shared beyond the case — a full card number in it would be a second
+disclosure; the report itself keeps the value as the examiner confirmed it). STIX is not
 written: §5 says only if a consumer for it exists.
 
 Everything is written inside the case (`reports/`), each file exclusive-
@@ -51,8 +52,6 @@ IOC_KINDS = {"selector:email": "email", "selector:ipv4": "ipv4",
              "selector:phone": "phone", "selector:btc": "bitcoin",
              "selector:eth": "ethereum", "selector:card": "card",
              "hashset": "sha256"}
-#: Evidence-level custody actions whose hashes describe the evidence itself.
-HASH_ACTIONS = ("ingest.completed", "image.completed", "acquisition.completed")
 
 LIMITS = (
     "Software read-only protection is not a hardware write blocker; where "
@@ -119,6 +118,23 @@ def iocs(findings) -> list[dict]:
     return out
 
 
+def _evidence_hashes(rows, evidence_id: str) -> str:
+    """The latest hashes custody recorded for one evidence item: an image's
+    MD5/SHA-1/SHA-256 (image hashing), a folder's manifest digest (ingest)."""
+    for row in reversed(rows):
+        if row.get("target") != evidence_id:
+            continue
+        h = row.get("hashes") or {}
+        if row.get("action") == "image.completed" and h.get("sha256"):
+            return (f"MD5 {_e(h.get('md5'))}<br>SHA-1 {_e(h.get('sha1'))}<br>"
+                    f"SHA-256 {_e(h.get('sha256'))}<br><span class=meta>image "
+                    f"hashed {_e(row.get('at'))}</span>")
+        if row.get("action") == "ingest.completed" and h.get("manifest"):
+            return (f"Manifest SHA-256 {_e(h.get('manifest'))}<br><span "
+                    f"class=meta>folder ingested {_e(row.get('at'))}</span>")
+    return ""
+
+
 def _detail_html(f) -> str:
     d = f.detail or {}
     parts = []
@@ -142,6 +158,12 @@ def _detail_html(f) -> str:
                      f"<p class=meta>Quote check: {_e(d.get('quote_check'))}. "
                      f"The model's words: {_e(d.get('why'))}</p>")
     elif f.kind in ("ai-image", "ai-video"):
+        parts.append(f"<p class=meta>The model's severity rating: "
+                     f"{_e(d.get('severity'))}"
+                     + (f" · {_e(d.get('frames_sampled'))} frames sampled at "
+                        "random" if f.kind == "ai-video" else "") + "</p>")
+        if d.get("affect_caveat"):
+            parts.append(f"<p class=warn>{_e(d.get('affect_caveat'))}</p>")
         if d.get("why"):
             parts.append(f"<p>The model's words: {_e(d.get('why'))}</p>")
         for fr in (d.get("frames") or [])[:30]:
@@ -207,19 +229,7 @@ def build_html(case, *, title: str = "", generated_by: str = "") -> tuple[str, d
                "<th>Source</th><th>Label</th><th>Registered</th>"
                "<th>Hashes recorded in custody</th></tr>")
     for item in case.evidence():
-        hashes = ""
-        for row in reversed(rows):
-            if row.get("action") in HASH_ACTIONS and (
-                    row.get("target") == item.id or
-                    os.path.normcase(str(row.get("target", ""))).startswith(
-                        os.path.normcase(os.path.dirname(item.source)))):
-                h = row.get("hashes") or {}
-                if h.get("sha256"):
-                    hashes = (f"MD5 {h.get('md5', '')}<br>SHA-1 {h.get('sha1', '')}"
-                              f"<br>SHA-256 {h.get('sha256', '')}<br>"
-                              f"<span class=meta>{_e(row.get('action'))} "
-                              f"{_e(row.get('at'))}</span>")
-                    break
+        hashes = _evidence_hashes(rows, item.id)
         out.append(f"<tr><td>{_e(item.id)}</td><td>{_e(item.kind)}</td>"
                    f"<td>{_e(item.source)}</td><td>{_e(item.label)}</td>"
                    f"<td>{_e(item.added_at)}</td><td>{hashes or '—'}</td></tr>")
@@ -229,7 +239,8 @@ def build_html(case, *, title: str = "", generated_by: str = "") -> tuple[str, d
     if acq:
         out.append("<h2>Acquisitions</h2><table><tr><th>When</th><th>Source "
                    "drive</th><th>Write blocker (examiner's words)</th>"
-                   "<th>Verified</th><th>Unreadable sector runs</th></tr>")
+                   "<th>Verified</th><th>Unreadable sector runs</th><th>Hashes of the "
+                   "bytes read</th></tr>")
         for r in acq:
             d = r.get("detail") or {}
             src = d.get("source") or {}
@@ -240,7 +251,11 @@ def build_html(case, *, title: str = "", generated_by: str = "") -> tuple[str, d
                        f" {_e(drive)}</td><td>{_e(d.get('write_blocker') or 'none stated')}"
                        f"</td><td class={'ok' if v else 'bad'}>"
                        f"{'yes' if v else 'NO' if v is False else 'not checked'}"
-                       f"</td><td>{_e(d.get('bad_sector_runs', 0))}</td></tr>")
+                       f"</td><td>{_e(d.get('bad_sector_runs', 0))}</td><td>"
+                       + "<br>".join(f"{k.upper()} {_e(v)}" for k, v in
+                                     (r.get("hashes") or {}).items()
+                                     if isinstance(v, str))
+                       + "</td></tr>")
         out.append("</table>")
 
     out.append("<h2>Confirmed findings</h2>")

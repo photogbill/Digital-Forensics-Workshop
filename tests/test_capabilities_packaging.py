@@ -26,12 +26,19 @@ class Capabilities(unittest.TestCase):
 
     def test_the_phase_two_file_system_layer_is_built_and_loads(self):
         for cid in ("raw", "partitions", "ntfs", "timestomp", "usnjrnl",
-                    "slack", "carving", "fde-detect", "ewf"):
+                    "slack", "carving", "fde-detect", "ewf", "fat"):
             self.assertEqual(self.rows[cid].status, "available", self.rows[cid])
-        for cid in ("fat", "vdisk", "ext4"):
+        for cid in ("vdisk", "ext4"):
             self.assertEqual(self.rows[cid].status, "planned", self.rows[cid])
         self.assertIn("synthetic", self.rows["usnjrnl"].note,
                       "the journal has not met a Windows-written $J yet, and says so")
+
+    def test_the_windows_artefacts_are_built_and_load(self):
+        # FORENSICS_PLAN §14 item 3 (2026-10-29)
+        for cid in ("registry", "prefetch", "lnk", "evtx", "report"):
+            self.assertEqual(self.rows[cid].status, "available", self.rows[cid])
+        self.assertIn("not yet been run on Windows", self.rows["prefetch"].note,
+                      "the native cross-check has not met Windows yet, and says so")
 
     def test_nothing_unbuilt_claims_to_be_available(self):
         for c in self.rows.values():

@@ -80,3 +80,26 @@ class Timestamps(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SideBySide(unittest.TestCase):
+    """The three digests on three threads (2026-10-29) give exactly what
+    hashlib gives one after another, whatever the chunk sizes."""
+
+    def test_parallel_digests_equal_the_sequential_ones(self):
+        import hashlib
+        import os as _os
+        from forensics_workshop import hashing
+        data = _os.urandom(3 * hashing.PARALLEL_MIN + 12345)
+        cuts = [0, 100, hashing.PARALLEL_MIN - 1, 2 * hashing.PARALLEL_MIN + 7,
+                len(data)]
+        h = hashing.Hasher()
+        for a, b in zip(cuts, cuts[1:]):
+            h.update(data[a:b])
+        got = h.result()
+        self.assertEqual(got.md5, hashlib.md5(data).hexdigest())
+        self.assertEqual(got.sha1, hashlib.sha1(data).hexdigest())
+        self.assertEqual(got.sha256, hashlib.sha256(data).hexdigest())
+        self.assertEqual(got.size, len(data))
+        self.assertTrue(hashing.hash_bytes(data).matches(got))
+

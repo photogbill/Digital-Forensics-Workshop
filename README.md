@@ -91,6 +91,39 @@ registered as evidence.
 | **Checked by a reader we did not write** | Every E01 the suite makes is read back by `ewf.py` and, where libewf is installed, by `ewfverify` — single and split sets, all three compressions, `error2`, and base-offset tables past 2 GiB. |
 | **Not a write blocker** | Windows may have mounted and touched the drive before it was opened. Imaging the running system disk is warned: a smear, not a snapshot. Windows needs Administrator. |
 
+## FAT/exFAT, Windows artefacts, mailboxes, reports — built 2026-10-29
+
+Items 1-5 of FORENSICS_PLAN §14's FTK-parity build order. Every parser was
+written from the format's published documentation (no GPL code), and checked
+against independent readers on real files (the numbers are in each module's
+docstring and in `capabilities.py`); those third-party samples are never
+copied into `tests/` — set `DFW_SAMPLES` to a folder holding them to run the
+optional comparisons.
+
+| Module | What it reads | Checked against |
+|---|---|---|
+| `fat.py` + `fatcase.py` | FAT12/16/32 and exFAT: every folder, deleted entries and deleted folders, entries hidden after an end-of-directory marker, chains with loop and cross-link detection, every FAT copy and backup boot sector compared. FAT times are LOCAL with no zone and never shown as UTC. A deleted FAT file is read on the contiguous ASSUMPTION and says how many of its clusters are now allocated. | mtools, The Sleuth Kit, dissect.fat, pyfatfs, fsck.exfat |
+| `registry.py` | Hives (and .LOG1/.LOG2 replayed in memory, deleted keys from free cells): USB, ShimCache, services, autoruns, programs, network, time zone, users, SAM, Amcache, UserAssist, RecentDocs, typed paths/URLs, RunMRU, WordWheelQuery, Open/Save and LastVisited MRUs, shellbags. | hivex (every key and value), regipy plugins — 17 real hives |
+| `shelllink.py`, `jumplist.py` | Shortcuts; automatic (compound file + DestList, deleted streams recovered) and custom destinations. | liblnk, LnkParse3 (1,036 links), olefile, dtformats |
+| `prefetch.py` | Versions 17-31, Windows 10 MAM compression decoded in pure Python. | libscca (64 files, 0 disagreements), dissect.util |
+| `evtx.py` | Binary XML with templates, records recovered from chunk slack, damaged logs read around; rows for logons, processes, services, tasks, log clearing, RDP, PowerShell, Defender, Sysmon. | pyevtx-rs (37,364 records identical), python-evtx |
+| `pst.py` | PST and OST (ANSI, Unicode, 4 KB pages; none/permute/cyclic; compressed OST): folders, messages, recipients, the four times, headers, attachments, embedded messages. Contacts, appointments, tasks and notes are `pst-item` rows, not mail. | libpff (1,250 messages, 656 attachments identical), readpst |
+| `winartifacts.py` | Finds all of the above by name and place on a parsed NTFS/FAT volume, or in an ingested folder (a triage collection, an exported mailbox), and stores their rows in the artefacts index with the file they came from (hashed). Deleted shortcuts/Jump Lists/Prefetch are read and say so. | — |
+| `parallel.py` | The parsing runs in isolated worker processes, one per spare core; reading stays in the engine process. Rows are stored in the same order either way. | rows identical with 0 and 2 workers |
+| `report.py` | The case report (one HTML file): CONFIRMED findings only, each marked engine or model, the model's words quoted; evidence hashes, acquisitions, custody verification, limits. IOC export CSV/JSON (cards masked). | — |
+| `artefacts/query.py` | One read-only view across every parser's rows (ATK's Artifacts page), with the rows that state a GPS position. | — |
+
+"Run everything" (`pipeline.py`) now also reads FAT/exFAT volumes and the
+Windows artefacts and mailboxes on every parsed volume.
+
+**Speed** — `bench.bat` measures the digests, E01 reading and every parser on
+this machine and saves the numbers in `logs\bench\`. On Bill's machine's
+Linux VM (two cores): the three digests side by side 565 MB/s (one after
+another 369); E01 inflate on threads 316 MB/s (one at a time 247); event
+logs about 4,000 records/s per core — the slowest parser, and the reason the
+parsing runs on every core. A single-file RAW image is now hashed once (it
+was hashed twice). No C accelerator yet: the numbers do not call for one.
+
 ## What the model hunts read — `corpus.py`
 
 ATK's model hunts (pictures, 30 frames across each video, text with verbatim
@@ -152,8 +185,16 @@ python -m forensics_workshop hunt           D:\cases\OP-1 E002 --examiner "Name"
 python -m forensics_workshop findings       D:\cases\OP-1 --examiner "Name" [--status proposed] [--kind pipeline-run]
 python -m forensics_workshop confirm        D:\cases\OP-1 FINDING_ID --examiner "Name" [--note "..."]
 python -m forensics_workshop reject         D:\cases\OP-1 FINDING_ID --examiner "Name" [--note "..."]
+python -m forensics_workshop report         D:\cases\OP-1 --examiner "Name" [--title "Op Pier"] [--no-iocs]
+python -m forensics_workshop rows           D:\cases\OP-1 --examiner "Name" [--evidence E002] [--parser evtx] [--kind evtx_logon] [--geo] [--since 2026-07-01] [--parsers]
+python -m forensics_workshop fat            D:\cases\OP-1 E003 --volume 1 --examiner "Name"
+python -m forensics_workshop windows        D:\cases\OP-1 E002 --volume 2 --examiner "Name" [--kinds registry,evtx] [--workers 0]
+python -m forensics_workshop windows        D:\cases\OP-1 E004 --examiner "Name"        (an ingested folder: no --volume)
 
 ```
+
+`entries`, `entry`, `preview` and `recover` serve FAT/exFAT volumes too
+(`--record` is then the entry id `entries` shows).
 
 `--examiner` is required wherever a case is opened, because opening a case is
 itself a custody record.

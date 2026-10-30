@@ -37,15 +37,20 @@ from dataclasses import asdict, dataclass, field
 
 from . import diskimage as _disk
 from . import domex
+from . import fatcase
+from . import winartifacts
 from . import index as _index
 from . import review
 from .errors import Cancelled, EvidenceError
 from .timeutil import utc_now
 
 #: Every step the runbook knows, in the order it runs them.
-STEPS = ("image", "ntfs", "domex", "slack", "carve")
+STEPS = ("image", "ntfs", "fat", "windows", "domex", "slack", "carve")
 #: What runs unless asked otherwise. Carve is excluded — it is the slow one.
-DEFAULT_STEPS = ("image", "ntfs", "domex", "slack")
+#: "fat" (2026-10-29) reads every FAT/exFAT volume's directories; "windows"
+#: (2026-10-29) the registry, shortcuts, Jump Lists, Prefetch, event logs and
+#: PST/OST mailboxes on every parsed volume, parsing on every spare core.
+DEFAULT_STEPS = ("image", "ntfs", "fat", "windows", "domex", "slack")
 
 
 @dataclass
@@ -69,6 +74,7 @@ class PipelineSummary:
     steps_requested: list = field(default_factory=list)
     carve: bool = False
     ntfs_volumes: list = field(default_factory=list)
+    fat_volumes: list = field(default_factory=list)
     results: list = field(default_factory=list)
     tally: dict = field(default_factory=dict)
     finding_id: str = ""
@@ -125,6 +131,16 @@ def _domex_done(case, eid, vol) -> bool:
                "parser = 'domex' AND row_ref LIKE ?", (eid, f"v{vol}:%")) > 0
 
 
+def _fat_done(case, eid, vol) -> bool:
+    return _run_done(case, eid, "fat", vol) or \
+        _count(case, "SELECT COUNT(*) FROM fat_entries WHERE evidence_id = ? "
+               "AND volume = ?", (eid, vol)) > 0
+
+
+def _windows_done(case, eid, vol) -> bool:
+    return _run_done(case, eid, "windows", vol)
+
+
 def _slack_done(case, eid, vol) -> bool:
     return _run_done(case, eid, "slack", vol)
 
@@ -171,7 +187,8 @@ def run_pipeline(case, evidence_id: str, *, steps=DEFAULT_STEPS,
                  max_file_mb: int = 512, force: bool = False,
                  progress=None, should_cancel=None) -> PipelineSummary:
     """Run every deterministic step on a registered disk image, in order, on
-    each NTFS volume. Files one run-summary proposal into the review queue."""
+    each NTFS volume (and the directories of each FAT/exFAT one). Files one
+    run-summary proposal into the review queue."""
     item = case.evidence_item(evidence_id)
     if item.kind != "raw-image":
         raise EvidenceError(
@@ -202,6 +219,26 @@ def run_pipeline(case, evidence_id: str, *, steps=DEFAULT_STEPS,
             volumes = []
         ntfs = [v for v in volumes if v.get("fs_type") == "ntfs"]
         summary.ntfs_volumes = [v["volume"] for v in ntfs]
+        fats = [v for v in volumes if v.get("fs_type") in fatcase.FAT_TYPES]
+        summary.fat_volumes = [v["volume"] for v in fats]
+
+        for v in fats:
+            vol = v["volume"]
+            _cancel_check(should_cancel)
+            if "fat" in steps:
+                if progress is not None:
+                    progress(f"volume {vol} ({v.get('fs_label') or 'FAT'})")
+                r.append(_do(summary, "fat", vol,
+                             force or not _fat_done(case, evidence_id, vol),
+                             lambda vol=vol: fatcase.parse_fat(
+                                 case, evidence_id, vol, progress=progress,
+                                 should_cancel=should_cancel)))
+            if "windows" in steps:
+                r.append(_do(summary, "windows", vol,
+                             force or not _windows_done(case, evidence_id, vol),
+                             lambda vol=vol: winartifacts.analyse_volume(
+                                 case, evidence_id, vol, progress=progress,
+                                 should_cancel=should_cancel)))
 
         for v in ntfs:
             vol = v["volume"]
@@ -213,6 +250,12 @@ def run_pipeline(case, evidence_id: str, *, steps=DEFAULT_STEPS,
                 r.append(_do(summary, "ntfs", vol,
                              force or not _ntfs_done(case, evidence_id, vol),
                              lambda vol=vol: _disk.parse_ntfs(
+                                 case, evidence_id, vol, progress=progress,
+                                 should_cancel=should_cancel)))
+            if "windows" in steps:
+                r.append(_do(summary, "windows", vol,
+                             force or not _windows_done(case, evidence_id, vol),
+                             lambda vol=vol: winartifacts.analyse_volume(
                                  case, evidence_id, vol, progress=progress,
                                  should_cancel=should_cancel)))
             if "domex" in steps:
@@ -260,6 +303,14 @@ def _tally(case, eid) -> dict:
         return {
             "volumes": c("SELECT COUNT(*) FROM volumes WHERE evidence_id = ?"),
             "ntfs_entries": c("SELECT COUNT(*) FROM ntfs_entries WHERE evidence_id = ?"),
+            "fat_entries": c("SELECT COUNT(*) FROM fat_entries WHERE evidence_id = ?"),
+            "windows_rows": c("SELECT COUNT(*) FROM artefacts WHERE evidence_id = ? "
+                              "AND parser IN ('registry', 'lnk', 'jumplist', "
+                              "'prefetch', 'evtx', 'pst')"),
+            "mail_messages": c("SELECT COUNT(*) FROM artefacts WHERE evidence_id = ? "
+                               "AND parser = 'pst' AND artefact = 'email'"),
+            "fat_deleted": c("SELECT COUNT(*) FROM fat_entries WHERE evidence_id = ? "
+                             "AND deleted = 1"),
             "domex_rows": c(base),
             "domex_documents": c(base + " AND artefact = 'document'"),
             "domex_images": c(base + " AND artefact = 'image'"),
@@ -274,7 +325,11 @@ def _file_summary_finding(case, eid, run_id, summary: PipelineSummary) -> str:
     t = summary.tally
     title = (f"Auto run: {t['domex_documents']} documents, {t['domex_images']} "
              f"images ({t['domex_geotagged']} geotagged), {t['domex_email']} "
-             f"email, {t['carve_candidates']} carve candidates")
+             f"email, {t['carve_candidates']} carve candidates"
+             + (f", {t['windows_rows']} Windows artefact rows"
+                if t.get("windows_rows") else "")
+             + (f", {t['fat_entries']} FAT entries ({t['fat_deleted']} deleted)"
+                if t.get("fat_entries") else ""))
     failed = [f"{r.step}{f' v{r.volume}' if r.volume is not None else ''}"
               for r in summary.results if r.state == "failed"]
     return review.propose(

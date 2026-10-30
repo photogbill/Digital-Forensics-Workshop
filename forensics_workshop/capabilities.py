@@ -229,9 +229,19 @@ _TABLE = (
     ("slack", "File slack and unallocated space", 2, "native",
      "forensics_workshop.diskimage", "", "", "planned",
      "Slack regions holding data are indexed; unallocated space is carved."),
-    ("fat", "FAT/exFAT", 2, "native", "", "", "", "planned",
-     "Volumes are identified and can be carved; their directories are not "
-     "parsed yet."),
+    ("fat", "FAT12/16/32 and exFAT directories, deleted entries included", 2,
+     "native", "forensics_workshop.fatcase", "", "", "planned",
+     "Built 2026-10-29 (fat.py, from Microsoft's FAT and exFAT "
+     "specifications): every folder walked, deleted entries and deleted "
+     "folders included, entries hidden after an end-of-directory marker "
+     "found, long names checked against their 8.3 checksums, chains "
+     "followed with loop and cross-link detection, every FAT copy and the "
+     "backup boot sector compared. A deleted FAT file is read on the "
+     "contiguous ASSUMPTION (FAT zeroes its chain) and says how many of its "
+     "clusters are now allocated. FAT times are local with no zone and are "
+     "never shown as UTC. Checked against mtools, The Sleuth Kit, "
+     "dissect.fat, pyfatfs and fsck.exfat on driver-written and corrupted "
+     "images."),
     ("carving", "Signature carving with preview", 2, "native",
      "forensics_workshop.carve", "", "", "planned",
      "Every candidate carries the basis of its length and previews before "
@@ -264,7 +274,7 @@ _TABLE = (
      "over. Reads through the read-only door; writes nothing to disk, keeps "
      "the file-system time as each row's measured UTC. Still to come: OCR and "
      "steganalysis (extend ATK's forensics.py/ocr.py), legacy OLE2 "
-     "SummaryInformation, and native PST/OST."),
+     "SummaryInformation. (PST/OST: the 'pst' row.)"),
     ("auto-pipeline", "One-button end-to-end runbook over a disk image", 3,
      "native", "forensics_workshop.pipeline", "", "", "planned",
      "Built native: on a registered disk image it runs hash → partitions → "
@@ -306,19 +316,75 @@ _TABLE = (
      "timestamp kept raw beside its decoded value with the epoch named. In "
      "progress: more iOS artefacts (locations, notes) and Android dumps. "
      "Native from SQLite, plists and protobuf."),
-    ("registry", "Registry hives (SAM, SYSTEM, SOFTWARE, NTUSER)", 4,
-     "native", "", "", "", "planned", ""),
+    ("registry", "Registry hives (SAM, SYSTEM, SOFTWARE, SECURITY, NTUSER, "
+     "UsrClass, Amcache)", 4, "native", "forensics_workshop.registry", "", "",
+     "planned",
+     "Built 2026-10-29: every key and value, transaction logs (Windows 8.1+) "
+     "replayed in memory, deleted keys and values recovered from free cells "
+     "and flagged. Rows for USB devices (USBSTOR, USB, MountedDevices), "
+     "ShimCache (Win7-10), services, autoruns, installed programs, network "
+     "interfaces and profiles, time zone, computer name, user profiles, SAM "
+     "accounts, Amcache files, UserAssist, RecentDocs, typed paths and URLs, "
+     "RunMRU, WordWheelQuery, Open/Save and LastVisited MRUs, and shellbags. "
+     "Checked key for key against hivex and plugin for plugin against regipy "
+     "on 17 real hives. Not read: SAM password hashes, SECURITY's secrets, "
+     "XP/Vista ShimCache, pre-8.1 logs."),
     ("prefetch", "Prefetch (including Win10+ MAM compression)", 4, "native",
-     "", "", "", "planned", "MAM via RtlDecompressBufferEx through ctypes."),
-    ("lnk", "LNK and Jump Lists", 4, "native", "", "", "", "planned", ""),
+     "forensics_workshop.prefetch", "", "", "planned",
+     "Built 2026-10-29: versions 17-31, MAM (LZXPRESS Huffman) decompressed "
+     "in pure Python from [MS-XCA], run times, run count, volumes and "
+     "referenced files. 10,133 fields on 64 real files agree with libscca. "
+     "The optional cross-check against Windows' own decompressor has not yet "
+     "been run on Windows."),
+    ("lnk", "LNK and Jump Lists", 4, "native",
+     "forensics_workshop.jumplist", "", "", "planned",
+     "Built 2026-10-29: shell links (shell items, LinkInfo, tracker and "
+     "property stores; shelllink.py), automatic destinations (compound file, "
+     "DestList, deleted streams recovered and flagged) and custom "
+     "destinations. Checked on 1,036 real links against liblnk and "
+     "LnkParse3, compound files against olefile, DestList against dtformats."),
+    ("pst", "Outlook mailboxes (PST and OST)", 3, "native",
+     "forensics_workshop.pst", "", "", "planned",
+     "Built 2026-10-29 from [MS-PST]: ANSI, Unicode and 4 KB-page OST "
+     "layouts; none, permute and cyclic encodings; compressed OST blocks. "
+     "Folders, messages (sender, recipients, the four times raw, headers, "
+     "message ID, body excerpt), attachments (streamed), embedded messages; "
+     "contacts, appointments, tasks and notes as their own rows, not mail. "
+     "1,250 messages and 656 attachments in 19 real files identical to "
+     "libpff. Deleted-item recovery is not done; named-property names and "
+     "search-folder contents are not read. No real ANSI file was available "
+     "to test."),
+    ("evtx", "Windows event logs (EVTX)", 4, "native",
+     "forensics_workshop.evtx", "", "", "planned",
+     "Built 2026-10-29: binary XML with templates, chunk by chunk, records "
+     "recovered from chunk slack and flagged (a copy of a live record is "
+     "folded into it), damaged logs read around and reported. Rows for "
+     "logons and failures, privileges, process creation, services, "
+     "scheduled tasks, account changes, log clearing, power, RDP, "
+     "PowerShell script blocks, Defender, Sysmon. 37,364 records identical "
+     "to pyevtx-rs. Message text (from the DLLs) and legacy .evt are not "
+     "read."),
     ("ese", "ESE databases (SRUM, Windows Search)", 4, "native", "", "", "",
      "planned", "Planned native from the format's documentation. pyesedb "
      "(libesedb, LGPL) is a licence-permitted alternative."),
     ("vss", "Volume Shadow Copies", 4, "native", "", "", "", "planned",
      "Offline, from an image; planned native. pyvshadow (libvshadow, LGPL) is "
      "a licence-permitted alternative."),
-    ("timeline", "Super timeline and IOC export", 4, "native", "", "", "",
-     "planned", "STIX only if a consumer for it exists."),
+    ("report", "Case report and IOC export (CSV/JSON)", 4, "native",
+     "forensics_workshop.report", "", "", "planned",
+     "Built 2026-10-29: one self-contained HTML report of CONFIRMED findings "
+     "only (proposals awaiting review and rejected ones are counted, not "
+     "reported), each finding marked as found by the engine or proposed by a "
+     "named model, the model's words quoted; the case, evidence hashes, "
+     "acquisitions, custody-chain verification and limits. The IOC export "
+     "lists e-mail, IPv4, phone, crypto addresses and known-bad SHA-256s from "
+     "confirmed findings, card numbers masked to the last four. Written "
+     "inside the case, never overwriting, hashed and recorded in custody. "
+     "STIX only if a consumer for it exists."),
+    ("timeline", "Super timeline", 4, "native", "", "", "", "planned",
+     "The artefacts index already carries every parsed row's time with its "
+     "raw value and epoch; a merged, filterable super-timeline view is to "
+     "come."),
     ("memory", "Memory analysis", 5, "native", "", "", "", "deferred",
      "No licence-permitted route: Volatility 3 (its own copyleft licence) and "
      "MemProcFS (AGPL) both require publishing this engine's source. Deferred "

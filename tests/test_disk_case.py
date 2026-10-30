@@ -265,8 +265,10 @@ class DiskCase(_DiskFixture):
         conn.close()
         with index.session(self.case.root) as conn:
             self.assertEqual(conn.execute("SELECT value FROM meta WHERE key = "
-                                          "'schema_version'").fetchone()[0], "2")
+                                          "'schema_version'").fetchone()[0],
+                             str(index.SCHEMA_VERSION))
             conn.execute("SELECT COUNT(*) FROM carve_candidates").fetchone()
+            conn.execute("SELECT COUNT(*) FROM fat_entries").fetchone()
 
 
 class CommandLine(_DiskFixture):
