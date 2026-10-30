@@ -53,16 +53,12 @@ containers are PLANNED NATIVE, each with a permitted library named as the
 alternative, not because the library is forbidden. A format is implemented from its documentation, never copied or
 translated from a GPL/AGPL project whose terms would reach this code.
 
-**ONE OWNER EXCEPTION, and it is not a loosening of the rule** (Bill,
-2026-09-30; FORENSICS_PLAN §1.1, §12.0). SAM Audio's weights carry Meta's SAM
-License, which permits commercial use but bans military/warfare, espionage
-and ITAR-controlled end uses — so `licence_permits` refuses it, and still
-does. Bill accepted it by name: *"if it goes to defense related work, we'll
-replace or remove it then."* `OWNER_EXCEPTIONS` records that decision —
-who, when, why, and what removes it — bound to ONE row id AND ONE exact
-licence string. A row holding it shows as the exception, in words; any other
-row with that licence, or that row with any other failing licence, is
-excluded exactly as before (`tests/test_media_trust.py` holds both).
+**OWNER EXCEPTIONS — none today.** The mechanism admits ONE component under
+ONE licence the rule refuses, as a named, dated decision of Bill's, bound to
+one row id and one exact licence string. It held one: SAM Audio (Meta's SAM
+License bans military, espionage and ITAR end uses), granted 2026-09-30 and
+REMOVED with SAM on 2026-10-29. `OWNER_EXCEPTIONS` is empty; adding one is a
+decision for Bill, made in FORENSICS_PLAN.md first.
 
 For a third-party row the `package` column is probed with `find_spec` —
 presence only, never an import, so a heavy or broken package cannot slow
@@ -155,27 +151,17 @@ class OwnerException:
         return asdict(self)
 
 
-#: Every owner exception there is. One. Adding another is a decision for
-#: Bill, made in FORENSICS_PLAN.md first — never a line added here to make a
-#: row stop showing as excluded.
-OWNER_EXCEPTIONS = {
-    "sam-audio": OwnerException(
-        capability="sam-audio", licence="LicenseRef-SAM-License",
-        granted_by="Bill (William R. Duncan)", granted_on="2026-09-30",
-        reason="Investigative leads and lifesaving recovery, not defense "
-               "work; the SAM License permits commercial use and its banned "
-               "end uses are not ATK's.",
-        removal_trigger="ATK goes to defense-related work",
-        sentence="owner exception — SAM License (military, warfare, espionage "
-                 "and ITAR end uses banned); replace or remove if ATK goes to "
-                 "defense-related work"),
-}
+#: Every owner exception there is: NONE. SAM Audio held the only one and was
+#: removed on 2026-10-29 (Bill). Adding one is a decision for Bill, made in
+#: FORENSICS_PLAN.md first — never a line added here to make a row stop
+#: showing as excluded.
+OWNER_EXCEPTIONS: dict = {}
 
 
 def owner_exception(row_id: str, licence: str) -> OwnerException | None:
     """The exception for exactly this row AND exactly this licence, or None.
-    Nothing else can ride it: not another row with the SAM License, and not
-    this row with some other licence the rule refuses."""
+    Nothing else can ride it: not another row with the same licence, and
+    not this row with some other licence the rule refuses."""
     found = OWNER_EXCEPTIONS.get(row_id)
     if found is not None and found.capability == row_id and \
             found.licence == licence:
@@ -343,32 +329,15 @@ _TABLE = (
      "Physical-device protocols and exploits. Analysis of an already-extracted "
      "mobile image is a different thing and is planned — see mobile-analysis."),
 
-    ("media", "Media recovery spine — five trust tiers, recipes, residuals, "
-     "seed disagreement (FORENSICS_PLAN §12.2–12.3)", 3, "native",
+    ("media", "Media recovery spine — five trust tiers, recipes, residuals "
+     "(FORENSICS_PLAN §12.2–12.3)", 3, "native",
      "forensics_workshop.media.lab", "", "", "planned",
-     "Built 2026-10-05 as far as SAM needs it: every output carries its tier "
-     "and a replayable recipe sidecar; outputs live in the case "
-     "(<case>/media/<recipe-id>/) with media.started/derived/failed custody; "
-     "the original is read once through the read-only door. Video input needs "
-     "an FFmpeg executable passed in (ATK passes its own), run as a separate "
-     "process. The DSP chain, consensus transcript and file repair of §12 are "
-     "still to come."),
-    ("sam-audio", "SAM Audio — prompted generative separation, INVENTED tier "
-     "(§12.9)", 3, "third-party", "forensics_workshop.media.sam_audio", "",
-     "LicenseRef-SAM-License", "planned",
-     "Meta's weights (audio-cpp/SAM-Audio-GGUF) run by audio.cpp's "
-     "audiocpp_cli as a SUBPROCESS, never in-process. Needs, at run time, the "
-     "runtime and a GGUF (ATK: get_sam.bat). Several seeds, disagreement "
-     "shown; every file named .invented. Weights are unverified until the "
-     "parity check against Meta's Python is run and the hash pinned "
-     "(media-pin). Not yet run on Windows."),
-    ("audiocpp", "audio.cpp runtime, pinned v0.9.0 (separate process)", 3,
-     "third-party", "forensics_workshop.media.sam_audio", "", "Apache-2.0",
-     "planned",
-     "github.com/0xShug0/audio.cpp, built from the pinned source release by "
-     "ATK's get_sam.bat (CUDA, else Vulkan; a CPU-only build only when asked "
-     "for, and refused at run time unless allowed). Nothing linked; notices "
-     "in forensics_workshop/media/NOTICES.md."),
+     "Every output carries its tier and a recipe sidecar; outputs live in the "
+     "case with custody records; the original is read once through the "
+     "read-only door. Video input needs an FFmpeg executable passed in (ATK "
+     "passes its own), run as a separate process. SAM Audio (generative "
+     "separation) was REMOVED on 2026-10-29; SAM runs left in an older case "
+     "are not deleted and still read back as Invented."),
     ("restoration", "Audio restoration — analyse, recommend, run, compare, "
      "export (§13.3–13.4)", 3, "third-party",
      "forensics_workshop.media.restore", "", "Apache-2.0", "planned",

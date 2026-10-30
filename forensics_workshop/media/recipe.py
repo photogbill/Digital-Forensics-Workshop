@@ -8,7 +8,7 @@ one hard rule of media recovery, and this module is where it becomes data:
     recovered   more real data combined                 adds REAL information
     cleaned     deterministic non-linear removal        cannot add; can remove
     inferred    discriminative / mask models            rarely adds
-    invented    generative models (SAM Audio)           CAN ADD what never was
+    invented    generative models                        CAN ADD what never was
 
 **An output carries the highest tier of any step in its recipe**
 (`highest_tier`): one generative step makes the whole chain Invented, and a
@@ -28,8 +28,9 @@ A model's own watermark is never relied on: audio.cpp v0.9.0 may watermark
 relies on it either way.
 
 **A tier is a property of the TOOL, not of what a file says about itself.**
-`TOOL_TIERS` gives each tool the lowest tier its step may claim — SAM is
-always Invented — and `check_recipe` refuses a recipe or sidecar whose steps,
+`TOOL_TIERS` gives each tool the lowest tier its step may claim — a
+generative separator is always Invented (SAM Audio, removed 2026-10-29, keeps
+its row so a SAM run left in an older case still reads back as Invented) — and `check_recipe` refuses a recipe or sidecar whose steps,
 outputs or `.invented` filenames disagree with it, so a hand-edited recipe
 cannot launder an invented stem into a measured one.
 """

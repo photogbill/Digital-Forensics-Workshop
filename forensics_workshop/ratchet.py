@@ -23,15 +23,14 @@ What counts as a write, anywhere in the package:
 * `sqlite3.connect`, because opening a database can write to it;
 * starting a child process — `subprocess.Popen`/`run`/`call`/`check_call`/
   `check_output`, `os.system`, `os.popen`, `os.startfile`, `os.spawn*` —
-  because FFmpeg and audiocpp_cli write files this walk cannot see; a
+  because FFmpeg and the workers write files this walk cannot see; a
   `spawn` writer must put every target through `assert_child_writes` first;
 * registry writes, and the Win32 calls that open or alter files directly
   (`CreateFileW`, `WriteFile`, `SetFileTime`, `DeviceIoControl` …).
 
 Each site must sit inside a function named in `blocker.WRITERS`, and a
 `case` writer must call `assert_case_path` in its own body — as a `harness`
-writer must call `assert_harness_path` and the `model-manifest` writer
-`assert_manifest_path` (`REQUIRED_GUARDS`). A WRITERS entry that matches no
+writer must call `assert_harness_path` (`REQUIRED_GUARDS`). A WRITERS entry that matches no
 function is a failure too.
 
 **AND IT REPORTS WHAT IT LOOKED AT.** A guard that quietly stops inspecting
@@ -106,7 +105,6 @@ WIN32_WRITERS = frozenset({"CreateFileW", "CreateFileA", "WriteFile",
 #: these kinds that never calls its guard can be handed any path at all.
 REQUIRED_GUARDS = {"case": "assert_case_path",
                    "harness": "assert_harness_path",
-                   "model-manifest": "assert_manifest_path",
                    "spawn": "assert_child_writes",
                    "runtime-scratch": "assert_runtime_scratch",
                    "calibration": "assert_calibration_path"}

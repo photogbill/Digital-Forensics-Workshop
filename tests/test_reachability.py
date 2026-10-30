@@ -39,9 +39,13 @@ BY_DESIGN = {
     "review:confirmed":
         "the admitted-findings view the report and contact graph will read; "
         "neither surface is built yet (FORENSICS_PLAN §10)",
-    "media.lab:capability_note":
-        "called by capabilities() through getattr on the imported module — "
-        "a hook a name walk cannot follow; the capabilities verb reaches it",
+    "media.wav:check_stem":
+        "a tested building block for checking a model's output file; its "
+        "caller (SAM's seed comparison) was removed 2026-10-29 and the "
+        "consensus transcript (§12.6) is the planned next caller",
+    "media.wav:read_array":
+        "the numpy reader beside the stdlib one, held to agree with it by "
+        "test_media_core; its caller went with SAM (2026-10-29)",
     "media.restore:capability_note":
         "called by capabilities() through getattr on the imported module — "
         "a hook a name walk cannot follow; the capabilities verb reaches it",

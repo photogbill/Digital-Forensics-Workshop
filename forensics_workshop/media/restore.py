@@ -73,8 +73,8 @@ hearing) or a sped-up one (below it). Measured: nothing added, nothing
 judged; no residual, because nothing was taken away.
 
 Everything lives in the case, `<case>/restoration/<run-id>/`, with
-`media.restore.*` custody; the run's `recipe.json` is the same format as a
-SAM run's, so a restored file fed back into the Media Lab or the voice
+`media.restore.*` custody; the run's `recipe.json` keeps the recipe format
+of `recipe.py`, so a restored file fed back into restoration or the voice
 comparison keeps its tier.
 """
 
@@ -92,7 +92,7 @@ from ..errors import Cancelled, MediaError
 from ..timeutil import utc_now
 from . import lab as _lab
 from . import recipe as _recipe
-from . import sam_audio as _sam
+from . import proc as _proc
 from . import voiceprint as _vp
 from . import wav as _wav
 
@@ -943,10 +943,10 @@ def _call_worker(request: dict, run_dir: Path, name: str, *, case, python,
 
     def beat(elapsed):
         if heartbeat is not None:
-            heartbeat(f"{name}: running {_sam.clock(elapsed)} · worker: "
-                      f"{_sam.last_line(log_path) or 'nothing printed yet'}")
+            heartbeat(f"{name}: running {_proc.clock(elapsed)} · worker: "
+                      f"{_proc.last_line(log_path) or 'nothing printed yet'}")
 
-    outcome = _sam.run_process(
+    outcome = _proc.run_process(
         argv + [os.fspath(req_path), os.fspath(resp_path)], log=log,
         timeout_s=timeout_s, writes=list(writes) + [resp_path],
         guard=spot.guard, should_cancel=should_cancel,
@@ -956,9 +956,9 @@ def _call_worker(request: dict, run_dir: Path, name: str, *, case, python,
     if outcome["state"] != "completed" or not resp_path.is_file():
         why = {"timeout": f"it ran past {timeout_s:.0f} s"}.get(
             outcome["state"], "the worker " +
-            _sam.exit_sentence(outcome["returncode"]))
+            _proc.exit_sentence(outcome["returncode"]))
         raise MediaError(f"{name} did not finish: {why}. It said: "
-                         f"{_sam.log_tail(log_path) or '(nothing)'} — log "
+                         f"{_proc.log_tail(log_path) or '(nothing)'} — log "
                          f"{log_path}.")
     with open(resp_path, "r", encoding="utf-8") as fh:
         return json.load(fh)
@@ -985,7 +985,7 @@ def _ffmpeg(ffmpeg, inputs, out, *, filters=None, complex_filter=None,
     if seconds:
         argv += ["-t", f"{float(seconds):g}"]
     argv += ["-c:a", "pcm_f32le", os.fspath(out)]
-    outcome = _sam.run_process(
+    outcome = _proc.run_process(
         argv, log=log, timeout_s=3600.0, writes=[out],
         guard=lambda p: blocker.assert_case_path(case.root, p),
         should_cancel=should_cancel)
@@ -994,14 +994,14 @@ def _ffmpeg(ffmpeg, inputs, out, *, filters=None, complex_filter=None,
     if outcome["state"] != "completed" or not Path(out).is_file():
         raise MediaError(
             f"FFmpeg could not make {Path(out).name} "
-            f"({_sam.exit_sentence(outcome['returncode'])}): "
-            f"{_sam.log_tail(getattr(log, 'name', '')) or outcome['error']}"
+            f"({_proc.exit_sentence(outcome['returncode'])}): "
+            f"{_proc.log_tail(getattr(log, 'name', '')) or outcome['error']}"
             f" — log {getattr(log, 'name', '')}.")
 
 
 def _tool_version(ffmpeg) -> str:
     try:
-        return _lab._tool_version(_sam.runtime_argv(ffmpeg))
+        return _lab._tool_version(_proc.runtime_argv(ffmpeg))
     except Exception:                                     # noqa: BLE001
         return ""
 
@@ -1469,23 +1469,23 @@ def _deepfilter(case, run_dir: Path, folder_name: str, rel: Path, n: int,
 
     def beat(elapsed):
         if heartbeat is not None:
-            heartbeat(f"DeepFilterNet: running {_sam.clock(elapsed)} · "
-                      f"{_sam.last_line(log_path) or 'nothing printed yet'}")
+            heartbeat(f"DeepFilterNet: running {_proc.clock(elapsed)} · "
+                      f"{_proc.last_line(log_path) or 'nothing printed yet'}")
 
-    outcome = _sam.run_process(
+    outcome = _proc.run_process(
         argv + args + [os.fspath(current)], log=log,
         timeout_s=1800.0 + 3.0 * duration, writes=[produced],
         guard=lambda p: blocker.assert_case_path(case.root, p),
         should_cancel=should_cancel,
-        env=_sam.child_env(_vp.make_scratch(scratch)),
+        env=_proc.child_env(_vp.make_scratch(scratch)),
         heartbeat=beat if heartbeat else None)
     if outcome["state"] == "cancelled":
         raise Cancelled("stopped while DeepFilterNet ran")
     if outcome["state"] != "completed" or not produced.is_file():
         why = {"timeout": "it ran past its time"}.get(
-            outcome["state"], _sam.exit_sentence(outcome["returncode"]))
+            outcome["state"], _proc.exit_sentence(outcome["returncode"]))
         raise MediaError(f"DeepFilterNet did not finish ({why}): "
-                         f"{_sam.log_tail(log_path) or outcome.get('error')}"
+                         f"{_proc.log_tail(log_path) or outcome.get('error')}"
                          f" — log {log_path}.")
     sha = hashing.hash_case_file(produced).sha256
     out_rel = (rel / out_dir.name / produced.name).as_posix()

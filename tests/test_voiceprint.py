@@ -115,7 +115,7 @@ class TheNumbers(unittest.TestCase):
 class _Fixture(TempDirCase):
     def setUp(self):
         super().setUp()
-        _cli, self.ffmpeg = M.install_fakes(self.tmp / "bin")
+        self.ffmpeg = M.install_ffmpeg(self.tmp / "bin")
         self.worker = M.install_vp_worker(self.tmp / "bin")
         self.model = M.fake_voice_model(self.tmp / "models" / "voiceprint"
                                         / "spkrec-ecapa-voxceleb")
@@ -403,7 +403,7 @@ class WritersAndCommandLine(_Fixture):
                   "--python", "PY", "--scratch", str(self.scratch)]
         real_ffmpeg = list(self.ffmpeg)
         worker = list(self.worker)
-        orig_runtime = V._sam.runtime_argv
+        orig_runtime = V._proc.runtime_argv
         orig_worker = V.worker_argv
 
         def runtime(a):
@@ -412,7 +412,7 @@ class WritersAndCommandLine(_Fixture):
         def worker_argv(python=None, w=None):
             return worker if python == "PY" else orig_worker(python, w)
 
-        V._sam.runtime_argv = runtime
+        V._proc.runtime_argv = runtime
         V.worker_argv = worker_argv
         try:
             code, out, err = self._cli(
@@ -442,7 +442,7 @@ class WritersAndCommandLine(_Fixture):
                                      str(self.model))
             self.assertEqual(json.loads(out), [])
         finally:
-            V._sam.runtime_argv = orig_runtime
+            V._proc.runtime_argv = orig_runtime
             V.worker_argv = orig_worker
 
 

@@ -1,5 +1,6 @@
-"""Media recovery's pure parts: the WAV reader, the tiers, anchors, and seed
-disagreement (FORENSICS_PLAN §12.2, §12.9). No subprocess, no GPU."""
+"""Media recovery's pure parts: the WAV reader and the tiers (FORENSICS_PLAN
+§12.2). No subprocess, no GPU. (Anchors and seed disagreement went with SAM
+Audio, 2026-10-29.)"""
 
 from __future__ import annotations
 
@@ -15,14 +16,20 @@ from _support import TempDirCase
 import mediasynth as M
 from forensics_workshop import blocker
 from forensics_workshop.errors import MediaError
-from forensics_workshop.media import disagreement as D
 from forensics_workshop.media import recipe as R
-from forensics_workshop.media import separator as S
 from forensics_workshop.media import wav as W
 
 
+def _np():
+    import importlib
+    try:
+        return importlib.import_module("numpy")
+    except ImportError:
+        return None
+
+
 def _has_numpy() -> bool:
-    return D._numpy() is not None
+    return _np() is not None
 
 
 COPY = "forensics_workshop read-only door (hashed copy)"
@@ -101,7 +108,7 @@ class WavReader(TempDirCase):
             W.window_levels(nan)
         if _has_numpy():
             with self.assertRaisesRegex(MediaError, "non-finite"):
-                W.read_array(nan, D._numpy())
+                W.read_array(nan, _np())
         good = M.write_wav(self.tmp / "ok.wav", M.tone(0.2), fmt="float32")
         self.assertEqual(W.check_stem(good).frames, 9600)
 
@@ -125,7 +132,7 @@ class WavReader(TempDirCase):
 
     @unittest.skipUnless(_has_numpy(), "numpy is not installed here")
     def test_the_numpy_reader_agrees_with_the_stdlib_one(self):
-        np = D._numpy()
+        np = _np()
         for fmt in ("pcm16", "float32", "pcm24"):
             p = M.write_wav(self.tmp / f"n{fmt}.wav", M.tone(0.3), fmt=fmt)
             _i, arr = W.read_array(p, np)
@@ -245,83 +252,6 @@ class Tiers(unittest.TestCase):
                          seed=1)
         self.assertEqual(side["tier"], "invented")
         self.assertIn("never a reading", side["tier_note"])
-
-
-class Anchors(unittest.TestCase):
-    def test_spellings_and_the_rule(self):
-        self.assertEqual(S.parse_anchor("+0.5:2.0").as_list(), ["+", 0.5, 2.0])
-        self.assertEqual(S.parse_anchor("-3 4").as_list(), ["-", 3.0, 4.0])
-        self.assertEqual(S.parse_anchor("+1.25-2").as_list(), ["+", 1.25, 2.0])
-        self.assertEqual(S.make_anchor("exclude", "3", 4).sign, "-")
-        for bad in ("0.5:2", "+2:1", "+1:1", "*1:2", "+a:b"):
-            with self.assertRaises(MediaError, msg=bad):
-                S.parse_anchor(bad)
-        with self.assertRaisesRegex(MediaError, "after the recording ends"):
-            S.check_anchors(["+5:6"], duration_s=4.0)
-        self.assertEqual(len(S.check_anchors([("+", 0, 1), "-2:3"], 4.0)), 2)
-
-
-class Disagreement(TempDirCase):
-    def _targets(self, steady: bool) -> dict:
-        out = {}
-        for seed in (1, 2, 3):
-            samples = M.tone(1.0, total=3.0)
-            if not steady and seed == 2:
-                extra = M.tone(0.5, freq=880, start=1.5, total=3.0)
-                samples = [a + b for a, b in zip(samples, extra)]
-            out[seed] = M.write_wav(self.tmp / f"s{seed}{steady}.wav",
-                                    samples, fmt="float32")
-        return out
-
-    def test_identical_seeds_disagree_nowhere(self):
-        for method in ("envelope", "bands") if _has_numpy() else ("envelope",):
-            result = D.compare(self._targets(True), method=method)
-            self.assertEqual(result["spans"], [], method)
-            self.assertEqual(max(r["spread_db"] for r in result["series"]), 0,
-                             method)
-            self.assertIn("agreement, which is not proof", result["summary"])
-
-    def test_one_seed_with_sound_where_another_is_silent_is_flagged(self):
-        for method in ("envelope", "bands") if _has_numpy() else ("envelope",):
-            result = D.compare(self._targets(False), method=method)
-            self.assertEqual(len(result["spans"]), 1, method)
-            span = result["spans"][0]
-            self.assertEqual((span["start_s"], span["end_s"]), (1.5, 2.0))
-            self.assertEqual(span["kind"], "presence")
-            self.assertEqual((span["loud"], span["silent"]), ([2], [1, 3]))
-            self.assertIn("seed 2 has sound where seed 1, 3 is silent",
-                          D.span_sentence(span))
-            self.assertEqual(result["method"],
-                             D.BANDS if method == "bands" else D.ENVELOPE)
-
-    def test_the_band_measure_sees_a_swap_the_envelope_cannot(self):
-        if not _has_numpy():
-            self.skipTest("numpy is not installed here")
-        a = M.write_wav(self.tmp / "a.wav", M.tone(1.0, freq=300, amp=0.5))
-        b = M.write_wav(self.tmp / "b.wav", M.tone(1.0, freq=5000, amp=0.5))
-        env = D.compare({1: a, 2: b}, method="envelope")
-        bands = D.compare({1: a, 2: b}, method="bands")
-        self.assertEqual(env["spans"], [], "same loudness, so no envelope flag")
-        self.assertTrue(bands["spans"], "different sound, so a band flag")
-
-    def test_an_empty_target_is_a_broken_run_never_agreement(self):
-        empty = M.write_wav(self.tmp / "e1.wav", [], fmt="float32")
-        empty2 = M.write_wav(self.tmp / "e2.wav", [], fmt="float32")
-        with self.assertRaisesRegex(MediaError, "empty target"):
-            D.compare({1: empty, 2: empty2}, method="envelope")
-
-    def test_one_seed_is_nothing_to_compare_not_agreement(self):
-        result = D.compare({1: self._targets(True)[1]})
-        self.assertEqual(result["spans"], [])
-        self.assertIn("nothing to compare", result["summary"])
-
-    def test_without_numpy_auto_falls_back_and_says_so(self):
-        with mock.patch.object(D, "_numpy", return_value=None):
-            self.assertEqual(D.method_available("auto"), "envelope")
-            with self.assertRaisesRegex(MediaError, "needs numpy"):
-                D.method_available("bands")
-            result = D.compare(self._targets(False))
-        self.assertEqual(result["method"], D.ENVELOPE)
 
 
 if __name__ == "__main__":

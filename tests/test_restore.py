@@ -160,7 +160,7 @@ class Recommending(unittest.TestCase):
 class _Fixture(TempDirCase):
     def setUp(self):
         super().setUp()
-        _cli, self.ffmpeg = M.install_fakes(self.tmp / "bin")
+        self.ffmpeg = M.install_ffmpeg(self.tmp / "bin")
         self.worker = M.install_restore_worker(
             self.tmp / "bin", m(snr_db=13.0, noise_db=-31.0, rate=44100,
                                 bandwidth_hz=22050.0))
@@ -845,9 +845,9 @@ class WritersAndCommandLine(_Fixture):
         return code, out.getvalue(), err.getvalue()
 
     def test_analyse_run_list_and_export_from_the_command_line(self):
-        orig_runtime, orig_worker = RS._sam.runtime_argv, RS._worker_argv
+        orig_runtime, orig_worker = RS._proc.runtime_argv, RS._worker_argv
         ff, wk = list(self.ffmpeg), list(self.worker)
-        RS._sam.runtime_argv = lambda a: ff if a == "FF" else orig_runtime(a)
+        RS._proc.runtime_argv = lambda a: ff if a == "FF" else orig_runtime(a)
         RS._worker_argv = lambda p, w: wk if p == "PY" else orig_worker(p, w)
         common = ["--ffmpeg", "FF", "--python", "PY", "--scratch",
                   str(self.scratch)]
@@ -876,7 +876,7 @@ class WritersAndCommandLine(_Fixture):
             self.assertEqual(code, 0, err)
             self.assertTrue(os.path.isfile(json.loads(out)["path"]))
         finally:
-            RS._sam.runtime_argv, RS._worker_argv = orig_runtime, orig_worker
+            RS._proc.runtime_argv, RS._worker_argv = orig_runtime, orig_worker
 
 
 if __name__ == "__main__":

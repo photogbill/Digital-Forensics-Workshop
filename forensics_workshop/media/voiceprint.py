@@ -53,7 +53,7 @@ from .. import case as _case
 from ..errors import Cancelled, MediaError
 from ..timeutil import utc_now
 from . import lab as _lab
-from . import sam_audio as _sam
+from . import proc as _proc
 from . import wav as _wav
 
 MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
@@ -185,7 +185,7 @@ def make_scratch(scratch) -> Path:
 def worker_env(scratch) -> dict:
     """Temp and every cache torch, CUDA and Hugging Face would otherwise put
     in the Windows profile — all in `scratch`. And offline, always."""
-    env = _sam.child_env(scratch)
+    env = _proc.child_env(scratch)
     root = os.fspath(scratch)
     env.update({"HF_HOME": os.path.join(root, "hf"),
                 "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
@@ -472,7 +472,7 @@ def require_ffmpeg(ffmpeg) -> list[str]:
         raise MediaError("Voice comparison needs FFmpeg to make 16 kHz mono "
                          "audio. ATK uses bin\\ffmpeg\\ffmpeg.exe "
                          "(get_tools.bat fetches it).")
-    argv0 = _sam.runtime_argv(ffmpeg)
+    argv0 = _proc.runtime_argv(ffmpeg)
     if not Path(argv0[-1]).is_file():
         raise MediaError(f"FFmpeg is not at {argv0[-1]}. Run get_tools.bat in "
                          "the ATK folder.")
@@ -485,7 +485,7 @@ def to_16k(ffmpeg, src, dst, *, log, guard, should_cancel=None) -> None:
     argv = require_ffmpeg(ffmpeg) + ["-hide_banner", "-nostdin", "-n", "-i", os.fspath(src),
                     "-map", "0:a:0", "-vn", "-sn", "-dn", "-ac", "1",
                     "-ar", str(RATE), "-c:a", "pcm_s16le", os.fspath(dst)]
-    outcome = _sam.run_process(argv, log=log, timeout_s=3600.0, writes=[dst],
+    outcome = _proc.run_process(argv, log=log, timeout_s=3600.0, writes=[dst],
                                guard=guard, should_cancel=should_cancel)
     if outcome["state"] == "cancelled":
         raise Cancelled("stopped while FFmpeg ran")
@@ -493,8 +493,8 @@ def to_16k(ffmpeg, src, dst, *, log, guard, should_cancel=None) -> None:
         raise MediaError(
             f"FFmpeg could not take 16 kHz mono audio out of "
             f"{Path(src).name} ({outcome['state']}, "
-            f"{_sam.exit_sentence(outcome['returncode'])}): "
-            f"{_sam.log_tail(getattr(log, 'name', '')) or outcome['error']}"
+            f"{_proc.exit_sentence(outcome['returncode'])}): "
+            f"{_proc.log_tail(getattr(log, 'name', '')) or outcome['error']}"
             f" — log {getattr(log, 'name', '')}.")
 
 
@@ -539,12 +539,12 @@ def embed(items, *, spot, run_dir: Path, model_dir, python=None, worker=None,
 
     def beat(elapsed):
         if heartbeat is not None:
-            last = _sam.last_line(log_path) if isinstance(
+            last = _proc.last_line(log_path) if isinstance(
                 log_path, (str, os.PathLike)) else ""
-            heartbeat(f"Voice model running {_sam.clock(elapsed)} · worker: "
+            heartbeat(f"Voice model running {_proc.clock(elapsed)} · worker: "
                       f"{last or 'nothing printed yet'}")
 
-    outcome = _sam.run_process(
+    outcome = _proc.run_process(
         argv + [os.fspath(request), os.fspath(response)], log=log,
         timeout_s=_worker_timeout(total), writes=[response], guard=spot.guard,
         should_cancel=should_cancel, env=worker_env(scratch),
@@ -555,10 +555,10 @@ def embed(items, *, spot, run_dir: Path, model_dir, python=None, worker=None,
         why = {"timeout": f"it ran past {_worker_timeout(total):.0f} s and "
                           "was stopped"}.get(
             outcome["state"],
-            "the worker " + _sam.exit_sentence(outcome["returncode"]))
+            "the worker " + _proc.exit_sentence(outcome["returncode"]))
         raise MediaError(
             f"The voice model did not finish: {why}. It said: "
-            f"{_sam.log_tail(log_path) or outcome['error'] or '(nothing)'}"
+            f"{_proc.log_tail(log_path) or outcome['error'] or '(nothing)'}"
             f" — full log {log_path}.")
     try:
         with open(response, "r", encoding="utf-8") as fh:

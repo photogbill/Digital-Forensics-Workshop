@@ -36,13 +36,6 @@
     python -m forensics_workshop findings      CASE --examiner NAME [--status proposed] [--kind pipeline-run] [--id ID]
     python -m forensics_workshop confirm       CASE FINDING_ID --examiner NAME [--note TEXT]
     python -m forensics_workshop reject        CASE FINDING_ID --examiner NAME [--note TEXT]
-  media recovery (FORENSICS_PLAN §12) — SAM Audio through audio.cpp
-    python -m forensics_workshop media-sam   CASE INPUT --examiner NAME --text "man speaking" --model GGUF --audiocpp EXE [--evidence E001] [--anchor +0.5:2.0] [--anchor=-3:4] [--seeds 3|1,7,42] [--ffmpeg EXE] [--backend cuda] [--memory-bounded auto|on|off] [--allow-cpu]
-    python -m forensics_workshop media-list  CASE --examiner NAME [--id RECIPE_ID]
-    python -m forensics_workshop media-replay CASE RECIPE_ID --examiner NAME --audiocpp EXE [--ffmpeg EXE] [--model GGUF] [--allow-cpu]
-    python -m forensics_workshop media-pin   MODEL --by NAME [--note TEXT] [--replace]
-    python -m forensics_workshop media-weights MODEL
-    python -m forensics_workshop media-negative-control NOISE.wav --out DIR --model GGUF --audiocpp EXE [--text TEXT] [--seeds 3] [--allow-cpu]
   voice comparison (FORENSICS_PLAN §13) — SpeechBrain ECAPA in its own process
     python -m forensics_workshop voice-enrol    CASE FILE... --examiner NAME --name "Caller A" [--profile ID] --model-dir DIR --python EXE --ffmpeg EXE [--device auto|cuda|cpu] [--evidence E001]
     python -m forensics_workshop voice-profiles CASE --examiner NAME
@@ -86,12 +79,8 @@ from . import manifest as _manifest
 from . import verify as _verify
 from .artefacts import browser as _browser
 from .artefacts import mobile as _mobile
-from .media import disagreement as _media_dis
-from .media import lab as _media
 from .media import restore as _restore
 from .media import voiceprint as _voice
-from .media import separator as _media_sep
-from .media import weights as _media_weights
 from .case import Case
 from .errors import ForensicsError
 from .extract import extract_file
@@ -494,103 +483,6 @@ def cmd_reject(args) -> int:
     return 0
 
 
-def _seeds_arg(text: str):
-    """`3` is a count (seeds 1, 2, 3); `1,7,42` is the seeds themselves."""
-    text = (text or "").strip()
-    if "," in text:
-        return [t.strip() for t in text.split(",") if t.strip()]
-    try:
-        return int(text)
-    except ValueError:
-        raise ValueError(f"--seeds is a count or a comma list, not {text!r}")
-
-
-def _anchors_arg(args) -> list:
-    out = [_media_sep.parse_anchor(a) for a in args.anchor or []]
-    out += [_media_sep.parse_anchor("+" + a) for a in args.include or []]
-    out += [_media_sep.parse_anchor("-" + a) for a in args.exclude or []]
-    return out
-
-
-def _print_run(result: dict) -> None:
-    """The run without its per-window series — that is for a page to draw."""
-    shown = dict(result)
-    dis = dict(shown.get("disagreement") or {})
-    dis.pop("series", None)
-    shown["disagreement"] = dis
-    _print(shown)
-    print(f"\nINVENTED TIER — {result.get('weights', {}).get('sentence', '')}; "
-          f"{result.get('negative_control', {}).get('sentence', '')}",
-          file=sys.stderr)
-    for span in dis.get("spans") or []:
-        print(f"  disagree {_media_dis.span_sentence(span)}", file=sys.stderr)
-
-
-ALLOW_CPU_HELP = ("run on a CPU-only audiocpp_cli build (refused by default: "
-                  "hours per minute of audio, no GPU)")
-
-
-def cmd_media_sam(args) -> int:
-    case = _open(args)
-    bounded = {"auto": None, "on": True, "off": False}[args.memory_bounded]
-    result = _media.run_sam(
-        case, args.input, text=args.text, model=args.model,
-        audiocpp=args.audiocpp, anchors=_anchors_arg(args),
-        seeds=_seeds_arg(args.seeds), ffmpeg=args.ffmpeg or None,
-        evidence_id=args.evidence, backend=args.backend or None,
-        memory_bounded=bounded, steps=args.steps, method=args.method,
-        progress=_progress, allow_cpu=args.allow_cpu)
-    _print_run(result)
-    return 0
-
-
-def cmd_media_list(args) -> int:
-    case = _open(args)
-    if args.id:
-        _print_run(_media.load_run(case, args.id))
-        return 0
-    rows = _media.list_runs(case)
-    for r in rows:
-        extra = f" (replay of {r['replay_of']})" if r.get("replay_of") else ""
-        print(f"{r['recipe_id']:34} {r['state']:10} {r['tier'] or '-':9} "
-              f"seeds {','.join(str(x) for x in r['seeds']) or '-':8} "
-              f"{r['text']!r} on {r['input']}{extra}"
-              + (f"  [{r['error']}]" if r.get("error") else ""))
-    print(f"\n{len(rows)} media run(s)")
-    return 0
-
-
-def cmd_media_replay(args) -> int:
-    case = _open(args)
-    _print(_media.replay(case, args.recipe, audiocpp=args.audiocpp,
-                         ffmpeg=args.ffmpeg or None, model=args.model or None,
-                         progress=_progress, allow_cpu=args.allow_cpu))
-    return 0
-
-
-def cmd_media_pin(args) -> int:
-    _print(_media_weights.pin_model(args.model, by=args.by, note=args.note,
-                                    replace=args.replace))
-    return 0
-
-
-def cmd_media_weights(args) -> int:
-    status = _media_weights.weights_status(args.model)
-    negative = _media_weights.negative_control_status(args.model,
-                                                      status["sha256"])
-    _print({"weights": status, "negative_control": negative})
-    return 0 if status["state"] != "refused" else 1
-
-
-def cmd_media_negative_control(args) -> int:
-    result = _media.negative_control(
-        args.noise, out_dir=args.out, model=args.model, audiocpp=args.audiocpp,
-        text=args.text, seeds=_seeds_arg(args.seeds), progress=_progress,
-        allow_cpu=args.allow_cpu)
-    _print(result)
-    return 1 if result["speaks_on_noise"] else 0
-
-
 def _voice_kw(args) -> dict:
     return {"model_dir": args.model_dir, "python": args.python or None,
             "ffmpeg": args.ffmpeg or None, "device": args.device,
@@ -943,71 +835,6 @@ def build_parser() -> argparse.ArgumentParser:
     rj.add_argument("finding")
     rj.add_argument("--note", default="")
 
-    ms = with_case("media-sam", cmd_media_sam,
-                   "SAM Audio: separate a described sound (INVENTED tier) "
-                   "into the case")
-    ms.add_argument("input", help="a file; with --evidence, a path inside it")
-    ms.add_argument("--evidence", default="",
-                    help="read INPUT as a path inside this registered folder")
-    ms.add_argument("--text", required=True,
-                    help='what to pull out, e.g. "man speaking"')
-    ms.add_argument("--anchor", action="append", default=[],
-                    help="+START:END to include, -START:END to exclude, in "
-                         "seconds; write an exclude as --anchor=-3:4")
-    ms.add_argument("--include", action="append", default=[],
-                    help="START:END where the wanted sound is audible")
-    ms.add_argument("--exclude", action="append", default=[],
-                    help="START:END where the unwanted sound is")
-    ms.add_argument("--seeds", default=str(len(_media.DEFAULT_SEEDS)),
-                    help="a count (3 -> seeds 1,2,3) or a list (1,7,42)")
-    ms.add_argument("--model", required=True, help="the SAM Audio GGUF")
-    ms.add_argument("--audiocpp", required=True,
-                    help="path to audiocpp_cli(.exe)")
-    ms.add_argument("--ffmpeg", default="",
-                    help="FFmpeg, needed when INPUT is not a WAV")
-    ms.add_argument("--backend", default="",
-                    choices=["", "cuda", "vulkan", "cpu", "best"])
-    ms.add_argument("--memory-bounded", default="auto",
-                    choices=["auto", "on", "off"])
-    ms.add_argument("--steps", type=int, default=None,
-                    help="num_inference_steps (audio.cpp default 16)")
-    ms.add_argument("--method", default="auto",
-                    choices=["auto", "envelope", "bands"],
-                    help="the seed-disagreement measure")
-    ms.add_argument("--allow-cpu", action="store_true",
-                    help=ALLOW_CPU_HELP)
-    ml = with_case("media-list", cmd_media_list, "the case's media runs")
-    ml.add_argument("--id", default="", help="show one run in full")
-    mr = with_case("media-replay", cmd_media_replay,
-                   "run a recipe again from the untouched original")
-    mr.add_argument("recipe")
-    mr.add_argument("--audiocpp", required=True)
-    mr.add_argument("--ffmpeg", default="")
-    mr.add_argument("--model", default="")
-    mr.add_argument("--allow-cpu", action="store_true", help=ALLOW_CPU_HELP)
-    mp = sub.add_parser("media-pin",
-                        help="pin a model's SHA-256 after the parity check")
-    mp.add_argument("model")
-    mp.add_argument("--by", required=True, help="who ran the parity check")
-    mp.add_argument("--note", default="")
-    mp.add_argument("--replace", action="store_true",
-                    help="re-pin a file that is pinned to another hash")
-    mp.set_defaults(fn=cmd_media_pin)
-    mw = sub.add_parser("media-weights",
-                        help="a model's pin and negative-control status")
-    mw.add_argument("model")
-    mw.set_defaults(fn=cmd_media_weights)
-    mn = sub.add_parser("media-negative-control",
-                        help="SAM on speech-absent noise: does it speak?")
-    mn.add_argument("noise", help="a WAV of noise with no speech in it")
-    mn.add_argument("--out", required=True,
-                    help="a folder outside every case for the run's files")
-    mn.add_argument("--model", required=True)
-    mn.add_argument("--audiocpp", required=True)
-    mn.add_argument("--text", default=_media.NEGATIVE_TEXT)
-    mn.add_argument("--seeds", default=str(len(_media.DEFAULT_SEEDS)))
-    mn.add_argument("--allow-cpu", action="store_true", help=ALLOW_CPU_HELP)
-    mn.set_defaults(fn=cmd_media_negative_control)
 
     def voice_runtime(sp):
         sp.add_argument("--model-dir", required=True,

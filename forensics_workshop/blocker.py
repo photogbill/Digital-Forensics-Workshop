@@ -79,20 +79,14 @@ NOATIME_FLAG = getattr(os, "O_NOATIME", 0)
 #:   harness     a validation run's own folder (FORENSICS_PLAN §12.12), which
 #:               the caller names and which is never inside a case — asserted
 #:               with `assert_harness_path`, and the ratchet checks the call
-#:   model-manifest  the pinned-hash manifest beside a model's weights
-#:               (media/weights.py) — exactly that one file, never in a case;
-#:               asserted with `media.weights.assert_manifest_path`
-#:   spawn       starts a CHILD PROCESS (FFmpeg, audiocpp_cli), whose own
+#:   spawn       starts a CHILD PROCESS (FFmpeg, a worker), whose own
 #:               writes no syntax tree can see — so every path the child is
 #:               told to write is put through a case or harness guard first,
 #:               with `assert_child_writes`, and the ratchet checks the call
-#:   runtime-scratch  the `tmp\` folder beside audiocpp_cli that the child
-#:               gets as TMP/TEMP (audio.cpp unpacks GGUF config sidecars
-#:               there) — so nothing lands in %TEMP% in the Windows profile;
-#:               exactly that folder, never in a case, asserted with
-#:               `media.sam_audio.assert_runtime_scratch` (and the voice
-#:               worker's temp and caches, `media.voiceprint`'s own guard of
-#:               the same name: exactly the folder the host named)
+#:   runtime-scratch  the temp and cache folder a worker gets as TMP/TEMP, so
+#:               nothing lands in %TEMP% in the Windows profile — exactly
+#:               the folder the host named, never in a case, asserted with
+#:               `media.voiceprint.assert_runtime_scratch`
 #:   calibration the voice model's `voiceprint_calibration.json`, in the
 #:               model's own folder and never in a case — asserted with
 #:               `media.voiceprint.assert_calibration_path`
@@ -119,27 +113,16 @@ WRITERS = {
     "artefacts.mobile:_open_working_copy": "case",
     "artefacts.mobile:_write_file_map": "case",
     "review:_append": "case",
-    # media recovery (FORENSICS_PLAN §12): run outputs go into the case; the
-    # negative control into a harness folder; pins beside the weights. The
-    # separator and FFmpeg write their own files as CHILD PROCESSES, into
-    # folders these functions made inside the case — see media/lab.py.
+    # media recovery (FORENSICS_PLAN §12-13): run logs go into the case;
+    # validation runs into a harness folder. FFmpeg and the workers write
+    # their own files as CHILD PROCESSES, into folders made inside the case.
+    # (SAM Audio's writers were removed with it, 2026-10-29.)
     "media.lab:_case_log": "case",
-    "media.lab:_case_settle": "case",
-    # a recording longer than SAM takes at once: its windows cut, each
-    # seed's window outputs joined, and both discarded once joined
-    "media.lab:_case_cut": "case",
-    "media.lab:_Join.__init__": "case",
-    "media.lab:_Join.add": "case",
-    "media.lab:_Join.close": "case",
-    "media.lab:_case_discard": "case",
     "media.lab:_harness_dirs": "harness",
     "media.lab:_harness_log": "harness",
-    "media.lab:_harness_settle": "harness",
     "media.lab:_harness_json": "harness",
-    "media.weights:_write_manifest": "model-manifest",
-    "media.sam_audio:run_process": "spawn",
-    "media.sam_audio:probe_version": "spawn",
-    "media.sam_audio:make_scratch": "runtime-scratch",
+    "media.proc:run_process": "spawn",
+    "media.proc:probe_version": "spawn",
     "media.voiceprint:make_scratch": "runtime-scratch",
     "media.voiceprint:_write_calibration": "calibration",
     "media.vp_worker:_write": "worker-output",
