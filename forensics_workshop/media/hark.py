@@ -9,7 +9,7 @@ easy for the operator."* — then *"would you like to build it?"*
 
 HARK runs on a Restore Audio analysis (its working copy — the combined
 channels when there are several) and never changes it. One button, one
-choice of time budget; seven stages, each its own worker run,
+choice of time budget; nine stages, each its own worker run,
 each saved before the next starts, so a day-long run that is stopped or
 interrupted picks up at the stage it reached (`resume=`):
 
@@ -26,19 +26,25 @@ interrupted picks up at the stage it reached (`resume=`):
    nine times in ten, how intelligible real speech is unprocessed at each
    level (ESTOI), and corrects the hunt's level estimate so each track can be
    placed on that curve. The mixtures exist only in the worker's memory.
-3. **EXTRACT** (Move 2) — each DETECTED voice pulled out along its pitch
+3. **LOOP** (Move 7) — the strongest voice's pitch range learnt from what
+   was DETECTED and the file hunted again in that range only; kept only when
+   the same test voices are found quieter or more voice is found.
+4. **EXTRACT** (Move 2) — each DETECTED voice pulled out along its pitch
    track: the pitch refined, its phase integrated (warped time, where the
    voice is periodic), its harmonics fitted block by block with a Wiener
    weight each. VOICE (the harmonics) and LIFT (the voice plus everything
    else through a Wiener filter on the file's noise) become a restoration
    result of the run — tier **Cleaned**, with residual, recipe and sidecar,
    in the results table beside every other option.
-4. **CENSUS** (Move 8) — every other sound, the way passive sonar finds
+5. **CONSONANTS** (M3) — consonants hunted only beside the voiced
+   islands, in the fricative band, each margin's p-value from the file's
+   own noise, Benjamini-Hochberg across them (Measured, no audio).
+6. **CENSUS** (Move 8) — every other sound, the way passive sonar finds
    ships: the rates at which the noise's loudness pulses (DEMON — engines,
    propellers, rotors, fans, footsteps), each with its false-alarm rate;
    and the hunt's steady machine tracks taken out along their own pitch
    (Move 2 in reverse), a restoration result (Cleaned).
-5. **SELFTRAIN** (Move 3) — GTCRN, a 48 000-parameter speech denoiser,
+7. **SELFTRAIN** (Move 3) — GTCRN, a 48 000-parameter speech denoiser,
    trained on THIS recording: a stretch of it with more of its own noise
    added goes in, a target made from the recording comes out, so the
    network learns this file's noise — not the microphone noise every other
@@ -47,14 +53,14 @@ interrupted picks up at the stage it reached (`resume=`):
    about speech then came from this file). Its output becomes a restoration
    result, tier **Inferred**. It trains on one half of the file's noise and
    is scored on a probe built from the other half.
-6. **SCORE** (increment 2b) — a probe made of the file's own noise with
+8. **SCORE** (increment 2b) — a probe made of the file's own noise with
    clean phrases hidden in it at the calibration's levels; every candidate
    restoration chain run on it exactly as Restore Audio runs it, and Move 2
    run on it as on the file; each scored against the clean phrases (ESTOI,
    scale-invariant SNR, noise left in the pauses). The best for THIS file
    is the one that recovers the hidden phrases best at the level of the
    file's own voices — measured, not ranked by rule.
-7. **AUDIT** (Move 6) — every restoration output and residual of the run
+9. **AUDIT** (Move 6) — every restoration output and residual of the run
    (Moves 2 and 3 included) hunted the same way: the speaker's pitch track in
    what a chain REMOVED; a confident track in its OUTPUT that the input's
    hunt did not find, with no trace along that exact pitch path in the
@@ -104,8 +110,36 @@ PROBE_TOOL = "forensics_workshop hark_worker probe"
 SELFTRAIN_TOOL = "forensics_workshop selftrain_worker GTCRN trained on this file"
 GTCRN_TOOL = "forensics_workshop selftrain_worker GTCRN published weights"
 MACHINE_TOOL = "forensics_workshop hark_worker machine cancellation"
-STAGES = ("hunt", "calibrate", "loop", "extract", "census", "selftrain",
-          "score", "audit")
+STAGES = ("hunt", "calibrate", "loop", "extract", "consonants", "census",
+          "tse", "selftrain", "generate", "score", "audit", "map")
+#: Move 4, the generative lane (with M2 and M6): a speech prior trained on
+#: the operator's GPU (train_prior.bat), posterior sampling under the
+#: file's own noise model, many samples and an uncertainty map — Invented.
+PRIOR_WORKER = Path(__file__).with_name("prior_worker.py")
+PRIOR_TOOL = "forensics_workshop prior_worker posterior sampling"
+PRIOR_OPTION = "hark-generated"
+PRIOR_LABEL = "HARK — the generative lane's guess, with its uncertainty " \
+    "map (Move 4)"
+UNCERTAINTY_FILE = "uncertainty.png"
+M6_MIN_S = 2.5
+#: Move 7's second half: ClearerVoice's two-speaker separator (MossFormer2_
+#: SS_16K, Apache-2.0, ported to torch) steered to ONE speaker by Move 2's
+#: voice. Its weights: get_speechbrain.bat, pinned commit and SHA-256.
+CLEARERVOICE_WORKER = Path(__file__).with_name("clearervoice_worker.py")
+CV_TOOL = "forensics_workshop clearervoice_worker MossFormer2_SS_16K " \
+    "steered by Move 2's voice"
+CV_OPTION = "hark-tse"
+CV_LABEL = "HARK — the target speaker: ClearerVoice steered by Move 2's " \
+    "voice (Move 7)"
+CV_REPO = "https://huggingface.co/alibabasglab/MossFormer2_SS_16K"
+CV_COMMIT = "407cb030cd66340918ebb6c8cc63b18f8592cdbe"
+CV_FILE = "last_best_checkpoint.pt"
+CV_SHA256 = "00a3a48bda492db1e829b85dd443f8f43a43039a3e90f1a24962ea9caf14a11a"
+#: two clean phrases mixed must come apart by at least this much (SI-SNR
+#: improvement) before anything ClearerVoice makes of the file is kept
+CV_MIN_SELFCHECK_DB = 3.0
+#: the provenance map: the hunt's map with one lane per tier beneath it
+PROVENANCE_FILE = "provenance.png"
 #: Move 7, the speaker loop: learn the strongest voice's pitch range from
 #: what the hunt DETECTED (5th-95th percentile, LOOP_MARGIN either side, at
 #: least LOOP_MIN_OCTAVES wide) and hunt again in that range only.
@@ -124,6 +158,11 @@ LOOP_PROBE_INSET = (1.18, 1.14)
 MACHINE_OPTION = "hark-machine"
 MACHINE_LABEL = "HARK — steady machine sound taken out along its track " \
     "(Move 8)"
+#: Move 8's steady tones (the analysis's lines — a machine that runs the
+#: whole file at one speed): each followed and taken out, Cleaned.
+TONE_OPTION = "hark-tones"
+TONE_LABEL = "HARK — steady tones followed and taken out (Move 8)"
+TONE_TOOL = "forensics_workshop hark_worker tone cancellation"
 #: The restoration result Move 2's outputs land in (one per run: a newer
 #: HARK run's extraction replaces it in the table; its files stay).
 RESULT_OPTION = "hark"
@@ -175,7 +214,8 @@ BUDGETS = {
         "probe_per_level": 1, "score_chains": "run",
         "selftrain_minutes": 4.0, "selftrain_steps": 400,
         "selftrain_scratch": False, "census_surrogates": 3,
-        "loop_rounds": 1, "loop_probes": 3},
+        "loop_rounds": 1, "loop_probes": 3, "tse": False,
+        "generate": None},
     "thorough": {
         "label": "Thorough",
         "steps_per_octave": 36,
@@ -186,7 +226,8 @@ BUDGETS = {
         "probe_per_level": 2, "score_chains": "all",
         "selftrain_minutes": 30.0, "selftrain_steps": 4000,
         "selftrain_scratch": False, "census_surrogates": 6,
-        "loop_rounds": 2, "loop_probes": 6},
+        "loop_rounds": 2, "loop_probes": 6, "tse": True,
+        "generate": {"samples": 4, "steps": 30, "em_rounds": 2}},
     "overnight": {
         "label": "Overnight",
         "steps_per_octave": 36,
@@ -197,7 +238,9 @@ BUDGETS = {
         "audit_surrogates": 10, "probe_per_level": 4, "score_chains": "all",
         "selftrain_minutes": 240.0, "selftrain_steps": 40000,
         "selftrain_scratch": True, "census_surrogates": 12,
-        "loop_rounds": 3, "loop_probes": 16},
+        "loop_rounds": 3, "loop_probes": 16, "tse": True,
+        "generate": {"samples": 16, "steps": 50, "em_rounds": 3,
+                     "swap": True}},
     "day": {
         "label": "Full day",
         "steps_per_octave": 36,
@@ -208,7 +251,9 @@ BUDGETS = {
         "audit_surrogates": 20, "probe_per_level": 4, "score_chains": "all",
         "selftrain_minutes": 600.0, "selftrain_steps": 100000,
         "selftrain_scratch": True, "census_surrogates": 20,
-        "loop_rounds": 4, "loop_probes": 30},
+        "loop_rounds": 4, "loop_probes": 30, "tse": True,
+        "generate": {"samples": 32, "steps": 80, "em_rounds": 3,
+                     "swap": True, "speaker": True}},
 }
 #: Rough worker seconds per second of audio hunted (file or surrogate) on a
 #: two-core CPU, measured 2026-11-10 — the timeouts allow ten times that.
@@ -247,6 +292,17 @@ def estimate_minutes(budget_name: str, seconds: float) -> float:
     loop_cal = 8.0 * len(p["levels"]) * int(p.get("loop_probes", 0)) * 2
     work += (SECONDS_PER_AUDIO_SECOND * (0.5 * hunt + loop_cal) * 3.0
              * int(p.get("loop_rounds", 0)))
+    # Move 7's ClearerVoice: about 7 s of CPU per second of audio (a GPU
+    # is far faster)
+    if p.get("tse"):
+        work += 7.0 * float(seconds)
+    # Move 4: each sample is `steps` passes of the prior over the file
+    # (about 0.05 s of CPU per second of audio per pass for the small
+    # prior; a GPU is far faster)
+    g = p.get("generate") or {}
+    if g:
+        work += 0.05 * float(seconds) * g["steps"] * (g["samples"]
+                                                       + g["em_rounds"])
     return round(work / 60.0, 1)
 
 
@@ -405,6 +461,8 @@ def run(case, run_id: str, *, budget_name: str = "quick", python=None,
         device: str = "auto", resume: str = "", stages=STAGES,
         models_root=None, restore_worker=None, deepfilter=None,
         rnnoise_model=None, gtcrn_weights=None, selftrain_worker=None,
+        clearervoice_weights=None, cv_worker=None, priors=None,
+        prior_worker=None,
         progress=None, heartbeat=None, should_cancel=None) -> dict:
     """Run HARK over a Restore Audio analysis. `phrases`: a folder of clean
     speech for the calibration and the chain scoring (ATK: models\\
@@ -577,6 +635,16 @@ def run(case, run_id: str, *, budget_name: str = "quick", python=None,
                     _save_state(case, folder, state)
                     say(extract_sentence(ex))
                 report = _restore.load_run(case, run_id)
+            if "consonants" in stages and \
+                    "consonants" not in state["stages"]:
+                state["stages"]["consonants"] = _consonants(
+                    case, folder, vhunt, params, working, seconds,
+                    python=python, worker=worker, scratch=scratch,
+                    device=device, log=log, say=say, heartbeat=heartbeat,
+                    should_cancel=should_cancel)
+                _save_state(case, folder, state)
+                say(consonant_sentence(_response(folder, "consonants"),
+                                       state["stages"]["consonants"]))
             if "census" in stages and "census" not in state["stages"]:
                 state["stages"]["census"] = _census(
                     case, run_id, hark_id, folder, hunt, params, working,
@@ -588,6 +656,17 @@ def run(case, run_id: str, *, budget_name: str = "quick", python=None,
                 say(census_sentence(_response(folder, "census"),
                                     state["stages"]["census"]))
                 report = _restore.load_run(case, run_id)
+            if "tse" in stages and "tse" not in state["stages"]:
+                state["stages"]["tse"] = _tse(
+                    case, run_id, hark_id, folder, params, w_sha, seconds,
+                    weights=clearervoice_weights, cv_worker=cv_worker,
+                    python=python, ffmpeg=ffmpeg,
+                    restore_worker=restore_worker, scratch=scratch,
+                    device=device, log=log, say=say, heartbeat=heartbeat,
+                    should_cancel=should_cancel)
+                _save_state(case, folder, state)
+                say(tse_sentence(state["stages"]["tse"]))
+                report = _restore.load_run(case, run_id)
             if "selftrain" in stages and "selftrain" not in state["stages"]:
                 state["stages"]["selftrain"] = _selftrain(
                     case, run_id, hark_id, folder, report, vhunt, params,
@@ -598,6 +677,17 @@ def run(case, run_id: str, *, budget_name: str = "quick", python=None,
                     heartbeat=heartbeat, should_cancel=should_cancel)
                 _save_state(case, folder, state)
                 say(selftrain_sentence(state["stages"]["selftrain"]))
+                report = _restore.load_run(case, run_id)
+            if "generate" in stages and "generate" not in state["stages"]:
+                state["stages"]["generate"] = _generate(
+                    case, run_id, hark_id, folder, vhunt, params, w_sha,
+                    seconds, priors=priors, prior_worker=prior_worker,
+                    python=python, ffmpeg=ffmpeg,
+                    restore_worker=restore_worker, scratch=scratch,
+                    device=device, log=log, say=say, heartbeat=heartbeat,
+                    should_cancel=should_cancel)
+                _save_state(case, folder, state)
+                say(generate_sentence(state["stages"]["generate"]))
                 report = _restore.load_run(case, run_id)
             if "score" in stages and "score" not in state["stages"]:
                 ph = [folder / p["file"] for p in state.get("phrases") or []
@@ -622,7 +712,9 @@ def run(case, run_id: str, *, budget_name: str = "quick", python=None,
                         seconds=seconds,
                         trained=(state["stages"].get("selftrain") or {})
                         .get("models") or {},
-                        selftrain_worker=selftrain_worker)
+                        selftrain_worker=selftrain_worker,
+                        generated=state["stages"].get("generate"),
+                        priors=priors, prior_worker=prior_worker)
                     _save_state(case, folder, state)
                     choice = chain_choice(load(case, run_id, hark_id))
                     if choice:
@@ -659,6 +751,13 @@ def run(case, run_id: str, *, budget_name: str = "quick", python=None,
                                      ("id", "option", "label", "stem",
                                       "tier", "speech_only")}
                                     for t in targets]}
+                _save_state(case, folder, state)
+            if "map" in stages and "map" not in state["stages"]:
+                state["stages"]["map"] = _provenance(
+                    case, folder, vhunt, state, working, seconds,
+                    python=python, worker=worker, scratch=scratch,
+                    device=device, log=log, say=say, heartbeat=heartbeat,
+                    should_cancel=should_cancel)
                 _save_state(case, folder, state)
         produced = _record_map(case, run_dir, folder, w_sha, report, state)
         state["finished_at"] = utc_now()
@@ -1097,6 +1196,459 @@ def weights_info(path) -> dict:
             "weights), then this file's own noise"}
 
 
+def _consonants(case, folder: Path, hunt: dict, params: dict, working,
+                seconds: float, *, python, worker, scratch, device, log, say,
+                heartbeat, should_cancel) -> dict:
+    """M3: consonants hunted only where the vowels say they must be — the
+    30-150 ms beside each DETECTED voice stretch, in the fricative and burst
+    band, against the file's own noise (Measured, no audio)."""
+    voices = [g for g, m in zip(hunt.get("segments") or [],
+                                machine_flags(hunt.get("segments") or []))
+              if g.get("status") == "detected" and not m]
+    if not voices:
+        return {"done_at": utc_now(), "skipped": True,
+                "note": "no DETECTED voice to look beside"}
+    say(f"HARK: consonants beside {len(voices)} voice stretch(es) (M3)…")
+    try:
+        res = _call_worker(
+            {"op": "consonants", "wav": os.fspath(working), "hunt": hunt,
+             "device": device, "seed": int(params.get("seed", 4321))},
+            folder, "consonants", case=case, python=python, worker=worker,
+            scratch=scratch, log=log, writes=[], should_cancel=should_cancel,
+            heartbeat=heartbeat, timeout_s=_timeout(seconds, seconds * 2))
+    except MediaError as exc:
+        # M3 is an experiment: its failure costs M3 alone (the worker's log
+        # holds why; the stage's note says so)
+        return {"done_at": utc_now(), "skipped": True,
+                "note": f"the consonant hunt could not run: {exc}"}
+    return {"done_at": utc_now(), "elapsed_s": res.get("elapsed_s"),
+            "margins": len(res.get("margins") or []),
+            "found": res.get("found", 0)}
+
+
+def consonant_sentence(res: dict | None, st: dict | None = None) -> str:
+    """M3 in words."""
+    st = st or {}
+    if st.get("skipped"):
+        return f"Consonants (M3): not looked for — {st.get('note', '')}."
+    if not res:
+        return "The consonant hunt has not run."
+    margins = res.get("margins") or []
+    likely = [m for m in margins if m.get("status") == "likely"]
+    possible = [m for m in margins if m.get("status") == "possible"]
+    band = res.get("band_hz") or [2000, 8000]
+    text = (f"Consonants (M3): of {len(margins)} margins beside the voice "
+            f"(30–150 ms before and after each DETECTED stretch, "
+            f"{band[0] / 1000:g}–{band[1] / 1000:g} kHz), {len(likely)} hold "
+            "a burst of energy the file's own noise makes there less than "
+            f"one time in {round(1 / max(1e-9, res.get('q', 0.1))):d} "
+            "across all the margins tested (likely a consonant)")
+    if possible:
+        text += f", and {len(possible)} more are possible (p ≤ 0.05)"
+    return text + (". A lead on how many syllables to expect, and where — "
+                   "never audio.")
+
+
+def provenance_lanes(folder: Path, hunt: dict, state: dict) -> dict:
+    """What each tier contributed, and when — [start s, end s, weight] per
+    lane, for the provenance map."""
+    stages = state.get("stages") or {}
+    dur = float(hunt.get("duration_s") or 0.0)
+    segs = hunt.get("segments") or []
+    flags = machine_flags(segs)
+    lanes: dict = {k: [] for k in ("measured", "cleaned", "inferred",
+                                   "invented", "audit")}
+    for g, mach in zip(segs, flags):
+        if g.get("status") in ("detected", "possible") and not mach:
+            lanes["measured"].append([g["start_s"], g["end_s"],
+                                      1.0 if g["status"] == "detected"
+                                      else 0.4])
+    cons = _response(folder, "consonants") or {}
+    for m in cons.get("margins") or []:
+        if m.get("status") == "likely":
+            lanes["measured"].append([m["start_s"], m["end_s"], 1.0])
+    for it in (stages.get("census") or {}).get("items") or []:
+        if not it.get("track"):
+            lanes["measured"].append([it["start_s"], it["end_s"], 0.6])
+    ex = stages.get("extract") or {}
+    if ex and not ex.get("skipped"):
+        for g, mach in zip(segs, flags):
+            if g.get("status") == "detected" and not mach:
+                lanes["cleaned"].append([g["start_s"], g["end_s"], 1.0])
+    cen = stages.get("census") or {}
+    for m in cen.get("machines") or []:
+        if cen.get("option"):
+            lanes["cleaned"].append([m["start_s"], m["end_s"], 0.8])
+    if cen.get("tone_option"):
+        lanes["cleaned"].append([0.0, dur, 0.35])
+    st = stages.get("selftrain") or {}
+    if st.get("models") or st.get("runs"):
+        lanes["inferred"].append([0.0, dur, 1.0])
+    if (stages.get("tse") or {}).get("option"):
+        lanes["inferred"].append([0.0, dur, 0.7])
+    if (stages.get("generate") or {}).get("option"):
+        lanes["invented"].append([0.0, dur, 1.0])
+    for f in audit_flags(_response(folder, "audit"), state):
+        w = {"made": 1.0, "removed": 0.8, "revealed": 0.5}.get(f["kind"], 0.5)
+        lanes["audit"].append([f["start_s"], f["end_s"], w])
+    return lanes
+
+
+def _provenance(case, folder: Path, hunt: dict, state: dict, working,
+                seconds: float, *, python, worker, scratch, device, log, say,
+                heartbeat, should_cancel) -> dict:
+    """The provenance map: the hunt's map, with one lane per tier beneath
+    it — what was measured, cleaned, inferred, invented, and flagged."""
+    lanes = provenance_lanes(folder, hunt, state)
+    try:
+        res = _call_worker(
+            {"op": "provenance", "wav": os.fspath(working), "hunt": hunt,
+             "lanes": lanes, "device": device,
+             "png": os.fspath(folder / PROVENANCE_FILE)},
+            folder, "provenance", case=case, python=python, worker=worker,
+            scratch=scratch, log=log, writes=[folder / PROVENANCE_FILE],
+            should_cancel=should_cancel, heartbeat=heartbeat,
+            timeout_s=_timeout(seconds, seconds * 2))
+    except MediaError as exc:
+        # the hunt's own map stays; only the coloured lanes are lost
+        return {"done_at": utc_now(), "skipped": True,
+                "note": f"the provenance map could not be drawn: {exc}"}
+    say("HARK: the provenance map — " + ", ".join(
+        f"{k} {len(v)}" for k, v in lanes.items()) + ".")
+    return {"done_at": utc_now(), "elapsed_s": res.get("elapsed_s"),
+            "lanes": {k: len(v) for k, v in lanes.items()}}
+
+
+def _tse(case, run_id: str, hark_id: str, folder: Path, params: dict,
+         w_sha: str, seconds: float, *, weights, cv_worker, python, ffmpeg,
+         restore_worker, scratch, device, log, say, heartbeat,
+         should_cancel) -> dict:
+    """Move 7, second half: ClearerVoice's separator, steered to the voice
+    Move 2 pulled — the target speaker as a restoration result (Inferred)."""
+    base = {"done_at": utc_now()}
+    if not params.get("tse"):
+        return dict(base, skipped=True,
+                    note="Quick leaves it out (about 7 s of CPU per second "
+                         "of audio); Thorough and longer run it")
+    if not weights or not Path(weights).is_file():
+        return dict(base, skipped=True,
+                    note="ClearerVoice's MossFormer2_SS_16K weights are not "
+                         "installed (get_speechbrain.bat fetches them)")
+    report = _restore.load_run(case, run_id)
+    voice = next((o for r in report.get("results") or []
+                  if r.get("option") == RESULT_OPTION
+                  for o in r.get("outputs") or []
+                  if o.get("stem") == "voice"), None)
+    if voice is None:
+        return dict(base, skipped=True,
+                    note="Move 2 pulled no voice to steer it by")
+    sub = f"tse-{hark_id}"
+    xdir = _case.make_case_dirs(case.root, _restore.RESTORE_DIR,
+                                _vp._safe_id(run_id), HARK_DIR, hark_id, sub)
+    try:
+        ref, ref_rel, resampled = _input16k(case, report, ffmpeg=ffmpeg,
+                                            log=log,
+                                            should_cancel=should_cancel)
+        vpath = Path(voice["path"])
+        if int(report["analysis"].get("rate") or 0) != 16000:
+            v16 = xdir / "voice16k.wav"
+            if not v16.is_file():
+                _restore._ffmpeg(ffmpeg, [vpath], v16, rate=16000, log=log,
+                                 case=case, should_cancel=should_cancel)
+            vpath = v16
+    except MediaError as exc:
+        return dict(base, skipped=True, note=str(exc).rstrip("."))
+    # the port proves itself on this machine first: two of the run's clean
+    # phrases mixed and separated — if it cannot do that, nothing it makes
+    # of the file is kept
+    check = None
+    found = sorted((folder / PHRASE_DIR).glob("phrase*.wav"))
+    if len(found) >= 2:
+        try:
+            check = _call_worker(
+                {"op": "selfcheck", "weights": os.fspath(weights),
+                 "a": os.fspath(found[0]), "b": os.fspath(found[1]),
+                 "device": device},
+                folder, "tse-selfcheck", case=case, python=python,
+                worker=cv_worker, script=CLEARERVOICE_WORKER,
+                scratch=scratch, log=log, writes=[],
+                should_cancel=should_cancel, heartbeat=heartbeat,
+                timeout_s=_timeout(seconds, 600.0))
+        except MediaError as exc:
+            return dict(base, skipped=True,
+                        note=f"ClearerVoice's self-check failed: {exc}")
+        if float(check.get("improvement_db") or 0.0) < CV_MIN_SELFCHECK_DB:
+            return dict(base, skipped=True, selfcheck=check,
+                        note="ClearerVoice's self-check separated two clean "
+                             f"phrases by only {check.get('improvement_db')}"
+                             " dB — the port and the weights disagree, so "
+                             "nothing it made is kept (report this)")
+    raw = {"target": xdir / "target.raw.wav", "other": xdir / "other.raw.wav"}
+    say("HARK: ClearerVoice steered to the voice Move 2 pulled (Move 7)…")
+    try:
+        res = _call_worker(
+            {"op": "tse", "wav": os.fspath(ref), "voice": os.fspath(vpath),
+             "weights": os.fspath(weights), "device": device,
+             "outputs": {k: os.fspath(v) for k, v in raw.items()}},
+            folder, "tse", case=case, python=python,
+            worker=cv_worker, script=CLEARERVOICE_WORKER, scratch=scratch,
+            log=log, writes=list(raw.values()), should_cancel=should_cancel,
+            heartbeat=heartbeat, timeout_s=_timeout(seconds, seconds * 40))
+    except MediaError as exc:
+        return dict(base, skipped=True, note=str(exc).rstrip("."))
+    versions = res.get("versions") or {}
+    working_rel = report.get("working", "analysis.wav")
+    info = weights_info_cv(weights)
+
+    def derive(recipe, rel, raw_sha):
+        steps = []
+        if resampled:
+            recipe["steps"].append(_recipe.step(
+                "ffmpeg", tier="measured",
+                version=_restore._tool_version(ffmpeg) if ffmpeg else "",
+                params={"args": ["-ar", "16000"], "label": "The input at "
+                        "16 kHz, for the 16 kHz network"},
+                inputs={working_rel: w_sha},
+                outputs={ref_rel: hashing.hash_case_file(ref).sha256},
+                note="resampled only"))
+            steps.append(len(recipe["steps"]) - 1)
+        recipe["steps"].append(_recipe.step(
+            CV_TOOL, tier="inferred",
+            version=f"torch {versions.get('torch', '')}",
+            params={"hark_id": hark_id, "label": CV_LABEL,
+                    "windows": len(res.get("windows") or []),
+                    "steered": res.get("steered"),
+                    "flips": res.get("flips"),
+                    "device": versions.get("device", "")},
+            model=info,
+            inputs={ref_rel: hashing.hash_case_file(ref).sha256,
+                    voice["file"]: voice["sha256"]},
+            outputs={(rel / v.name).as_posix(): raw_sha[k]
+                     for k, v in raw.items()},
+            note="MossFormer2_SS_16K separates every 2 s window into two "
+                 "streams, put in one order by the windows' overlaps; in "
+                 "each window where Move 2 pulled the target voice, the "
+                 "stream whose spectrum follows it is the target — a network "
+                 "decides what belongs to each speaker"))
+        steps.append(len(recipe["steps"]) - 1)
+        return steps
+
+    _register_result(
+        case, run_id, hark_id, xdir, raw, option=CV_OPTION, label=CV_LABEL,
+        derive=derive, reference=ref, ref_rel=ref_rel, python=python,
+        restore_worker=restore_worker, scratch=scratch, log=log,
+        heartbeat=heartbeat, should_cancel=should_cancel,
+        device=versions.get("device", ""), speech_only=True)
+    return dict(base, elapsed_s=res.get("elapsed_s"), option=CV_OPTION,
+                windows=len(res.get("windows") or []),
+                steered=res.get("steered"), flips=res.get("flips"),
+                selfcheck=check)
+
+
+def weights_info_cv(weights) -> dict:
+    """What the recipe says of ClearerVoice's weights."""
+    return {"repo": CV_REPO, "commit": CV_COMMIT, "file": CV_FILE,
+            "sha256": CV_SHA256, "licence": "Apache-2.0",
+            "trained_on": "WSJ0-2mix and similar two-speaker mixtures "
+                          "(published weights), nothing of this file",
+            "path": os.fspath(weights)}
+
+
+def tse_sentence(st: dict | None) -> str:
+    """Move 7's second half in words."""
+    if not st:
+        return "ClearerVoice has not run."
+    if st.get("skipped"):
+        return f"Target speaker (Move 7, ClearerVoice): not run — " \
+               f"{st.get('note', '')}."
+    chk = st.get("selfcheck") or {}
+    proof = (f" (on this machine it first separated two clean phrases by "
+             f"+{chk['improvement_db']:.1f} dB)" if chk.get("improvement_db")
+             is not None else "")
+    return (f"Target speaker (Move 7, ClearerVoice){proof}: MossFormer2 "
+            f"separated {st.get('windows', 0)} two-second windows into two "
+            "voices; "
+            f"in {st.get('steered', 0)} of them the voice Move 2 pulled "
+            "chose which is the target, the rest follow the nearest choice. "
+            "The target and the other voice are in the restoration results "
+            "(INFERRED — a network decides what belongs to whom).")
+
+
+def _generate(case, run_id: str, hark_id: str, folder: Path, hunt: dict,
+              params: dict, w_sha: str, seconds: float, *, priors,
+              prior_worker, python, ffmpeg, restore_worker, scratch, device,
+              log, say, heartbeat, should_cancel) -> dict:
+    """Move 4: the speech prior's guesses under the file's own noise model,
+    their mean a restoration result (Invented), their spread the
+    uncertainty map; M2 (two priors) and M6 (a prior tuned to this
+    speaker) on the long budgets."""
+    base = {"done_at": utc_now()}
+    g = params.get("generate") or {}
+    if not g:
+        return dict(base, skipped=True,
+                    note="Quick leaves it out; Thorough and longer run it")
+    found = [Path(p) for p in (priors or []) if p and Path(p).is_file()]
+    if not found:
+        return dict(base, skipped=True,
+                    note="no speech prior is trained yet — train_prior.bat "
+                         "trains one on LibriSpeech on your GPU (days)")
+    report = _restore.load_run(case, run_id)
+    sub = f"generate-{hark_id}"
+    xdir = _case.make_case_dirs(case.root, _restore.RESTORE_DIR,
+                                _vp._safe_id(run_id), HARK_DIR, hark_id, sub)
+    try:
+        ref, ref_rel, resampled = _input16k(case, report, ffmpeg=ffmpeg,
+                                            log=log,
+                                            should_cancel=should_cancel)
+    except MediaError as exc:
+        return dict(base, skipped=True, note=str(exc).rstrip("."))
+    use = [{"name": p.parent.name or f"prior{i}", "path": os.fspath(p)}
+           for i, p in enumerate(found[:2 if g.get("swap") else 1])]
+    m6 = None
+    if g.get("speaker"):
+        spans = [[x["start_s"], x["end_s"]] for x, m in zip(
+            hunt.get("segments") or [],
+            machine_flags(hunt.get("segments") or []))
+            if x.get("status") == "detected" and not m]
+        lift = next((o for r in report.get("results") or []
+                     if r.get("option") == RESULT_OPTION
+                     for o in r.get("outputs") or []
+                     if o.get("stem") == "lift"), None)
+        secs = sum(b - a for a, b in spans)
+        if lift and secs >= M6_MIN_S:
+            try:
+                lpath = Path(lift["path"])
+                if int(report["analysis"].get("rate") or 0) != 16000:
+                    l16 = xdir / "lift16k.wav"
+                    if not l16.is_file():
+                        _restore._ffmpeg(ffmpeg, [lpath], l16, rate=16000,
+                                         log=log, case=case,
+                                         should_cancel=should_cancel)
+                    lpath = l16
+                sp = xdir / "speaker_prior.pt"
+                m6 = _call_worker(
+                    {"op": "finetune", "prior": use[0]["path"],
+                     "wav": os.fspath(lpath), "spans": spans,
+                     "out": os.fspath(sp), "device": device},
+                    folder, "generate-finetune", case=case, python=python,
+                    worker=prior_worker, script=PRIOR_WORKER,
+                    scratch=scratch, log=log, writes=[sp],
+                    should_cancel=should_cancel, heartbeat=heartbeat,
+                    timeout_s=_timeout(seconds, 3600.0))
+                use = [use[0], {"name": "this speaker (M6)",
+                                "path": os.fspath(sp)}]
+            except MediaError as exc:
+                m6 = {"failed": str(exc)}
+    outs = {"mean": xdir / "mean.raw.wav"}
+    for k, pr in enumerate(use[1:], 1):
+        outs[f"mean_{k}"] = xdir / f"mean_{k}.raw.wav"
+    png = folder / UNCERTAINTY_FILE
+    say(f"HARK: the generative lane — {g['samples']} guesses with "
+        f"{len(use)} prior(s) under this file's noise (Move 4)…")
+    try:
+        res = _call_worker(
+            {"op": "sample", "wav": os.fspath(ref),
+             "priors": [dict(pr, name=pr["name"] if k == 0 else str(k))
+                        for k, pr in enumerate(use)],
+             "free": noise_stretches(hunt), "samples": g["samples"],
+             "steps": g["steps"], "em_rounds": g["em_rounds"],
+             "seed": int(params.get("seed", 4321)), "device": device,
+             "outputs": dict({k: os.fspath(v) for k, v in outs.items()},
+                             png=os.fspath(png))},
+            folder, "generate", case=case, python=python,
+            worker=prior_worker, script=PRIOR_WORKER, scratch=scratch,
+            log=log, writes=list(outs.values()) + [png],
+            should_cancel=should_cancel, heartbeat=heartbeat,
+            timeout_s=_timeout(seconds, seconds * g["steps"]
+                               * (g["samples"] + g["em_rounds"]) * 2))
+    except MediaError as exc:
+        return dict(base, skipped=True, note=str(exc).rstrip("."))
+    versions = res.get("versions") or {}
+    working_rel = report.get("working", "analysis.wav")
+    raw = {k: v for k, v in outs.items() if v.is_file()}
+
+    def derive(recipe, rel, raw_sha):
+        steps = []
+        if resampled:
+            recipe["steps"].append(_recipe.step(
+                "ffmpeg", tier="measured",
+                version=_restore._tool_version(ffmpeg) if ffmpeg else "",
+                params={"args": ["-ar", "16000"], "label": "The input at "
+                        "16 kHz, for the 16 kHz prior"},
+                inputs={working_rel: w_sha},
+                outputs={ref_rel: hashing.hash_case_file(ref).sha256},
+                note="resampled only"))
+            steps.append(len(recipe["steps"]) - 1)
+        recipe["steps"].append(_recipe.step(
+            PRIOR_TOOL, tier="invented",
+            version=f"torch {versions.get('torch', '')}",
+            params={"hark_id": hark_id, "label": PRIOR_LABEL,
+                    "samples": g["samples"], "steps": g["steps"],
+                    "em_rounds": g["em_rounds"],
+                    "priors": res.get("priors"),
+                    "prior_swap": res.get("prior_swap"),
+                    "device": versions.get("device", "")},
+            model={"priors": [{"name": pr["name"], "file": pr["path"]}
+                              for pr in use],
+                   "licence": "HARK's own code; trained on CC BY 4.0 speech"},
+            inputs={ref_rel: hashing.hash_case_file(ref).sha256},
+            outputs={(rel / v.name).as_posix(): raw_sha[k]
+                     for k, v in raw.items()},
+            note="a speech prior's guesses, each pulled to what the "
+                 "recording allows under the file's own NMF noise model "
+                 "(refitted by EM); the mean of the guesses — a GENERATIVE "
+                 "model produced it, and the uncertainty map shows where "
+                 "the guesses disagree"))
+        steps.append(len(recipe["steps"]) - 1)
+        return steps
+
+    _register_result(
+        case, run_id, hark_id, xdir, raw, option=PRIOR_OPTION,
+        label=PRIOR_LABEL, derive=derive, reference=ref, ref_rel=ref_rel,
+        python=python, restore_worker=restore_worker, scratch=scratch,
+        log=log, heartbeat=heartbeat, should_cancel=should_cancel,
+        device=versions.get("device", ""), speech_only=True)
+    return dict(base, elapsed_s=res.get("elapsed_s"), option=PRIOR_OPTION,
+                priors=res.get("priors"), prior_swap=res.get("prior_swap"),
+                speaker=m6, uncertainty_map=UNCERTAINTY_FILE
+                if png.is_file() else None)
+
+
+def generate_sentence(st: dict | None) -> str:
+    """Move 4 in words."""
+    if not st:
+        return "The generative lane has not run."
+    if st.get("skipped"):
+        return f"Generative lane (Move 4): not run — {st.get('note', '')}."
+    pr = (st.get("priors") or [{}])[0]
+    text = (f"Generative lane (Move 4): {pr.get('samples', 0)} guesses by "
+            f"the speech prior ({pr.get('config', '')}, step "
+            f"{pr.get('step', 0)}) under this file's own noise model. Where "
+            f"they guessed speech the guesses disagree by "
+            f"{pr.get('spread_db_speech')} dB on average; "
+            f"{pr.get('uncertain_s', 0):.1f} s are uncertain (over 6 dB) and "
+            f"{100 * (pr.get('flagged_cells') or 0):.1f}% of cells fail the "
+            "consistency check — the uncertainty map shows where. The mean "
+            "guess is in the restoration results (INVENTED — a generative "
+            "model produced it: a lead, never evidence)")
+    sw = st.get("prior_swap")
+    if sw:
+        text += (f". Prior swap (M2): {sw['priors'][0]} against "
+                 f"{sw['priors'][1]} differ by {sw.get('differ_db_speech')} "
+                 f"dB where they guessed speech; "
+                 f"{100 * (sw.get('depends_cells') or 0):.1f}% of cells "
+                 "depend on which prior guessed (over 6 dB apart) — content "
+                 "that survives the swap came from the recording")
+    sp = st.get("speaker") or {}
+    if sp.get("steps"):
+        text += (f". M6: the prior was tuned for {sp['steps']} steps on "
+                 f"{sp.get('speech_s', 0):.0f} s of this speaker's confident "
+                 "speech before guessing")
+    elif sp.get("failed"):
+        text += f". M6 could not tune the prior: {sp['failed']}"
+    return text + "."
+
+
 def speaker_range(hunt: dict) -> dict | None:
     """The strongest voice's pitch range, learnt from what the hunt
     DETECTED (machines left out): its track, seconds, 5th-95th percentile
@@ -1335,23 +1887,33 @@ def _census(case, run_id: str, hark_id: str, folder: Path, hunt: dict,
                                 _vp._safe_id(run_id), HARK_DIR, hark_id, sub)
     raw = {"without": xdir / "without.raw.wav",
            "machine": xdir / "machine.raw.wav"} if found else {}
+    lines = [{k: l.get(k) for k in ("hz", "prominence_db", "series")}
+             for l in sorted(_restore.tonal_lines(
+                 _restore.load_run(case, run_id).get("analysis") or {}),
+                 key=lambda l: -l.get("z", 0.0))[:32] if l.get("hz")]
+    tdir = _case.make_case_dirs(case.root, _restore.RESTORE_DIR,
+                                _vp._safe_id(run_id), HARK_DIR, hark_id,
+                                f"tones-{hark_id}") if lines else None
+    traw = {"without": tdir / "without.raw.wav",
+            "tones": tdir / "tones.raw.wav"} if lines else {}
     n_surr = int(params.get("census_surrogates", 3))
     res = _call_worker(
         {"op": "census", "wav": os.fspath(working), "hunt": hunt,
          "machines": found, "params": params, "device": device,
-         "outputs": {k: os.fspath(v) for k, v in raw.items()}},
+         "outputs": {k: os.fspath(v) for k, v in raw.items()},
+         "lines": lines,
+         "tone_outputs": {k: os.fspath(v) for k, v in traw.items()}},
         folder, "census", case=case, python=python, worker=worker,
-        scratch=scratch, log=log, writes=list(raw.values()),
+        scratch=scratch, log=log,
+        writes=list(raw.values()) + list(traw.values()),
         should_cancel=should_cancel, heartbeat=heartbeat,
-        timeout_s=_timeout(seconds, seconds * (n_surr + 2) * 4))
+        timeout_s=_timeout(seconds, seconds * (n_surr + 2) * 4
+                           + seconds * len(lines)))
     items = pitched(((res.get("modulated") or {}).get("items") or []), hunt)
     st = {"done_at": utc_now(), "elapsed_s": res.get("elapsed_s"),
           "machines": summary, "items": items,
           "pulsing": len([i for i in items if not i.get("track")]),
-          "lines": [{k: l.get(k) for k in ("hz", "prominence_db", "series")}
-                    for l in sorted(_restore.tonal_lines(
-                        _restore.load_run(case, run_id).get("analysis")
-                        or {}), key=lambda l: -l.get("z", 0.0))[:8]]}
+          "lines": lines[:8], "tones": len(lines)}
     if raw and all(v.is_file() for v in raw.values()):
         report = _restore.load_run(case, run_id)
         working_rel = report.get("working", "analysis.wav")
@@ -1387,6 +1949,37 @@ def _census(case, run_id: str, hark_id: str, folder: Path, hunt: dict,
             heartbeat=heartbeat, should_cancel=should_cancel,
             device=versions.get("device", ""), speech_only=False)
         st["option"] = MACHINE_OPTION
+    if traw and all(v.is_file() for v in traw.values()):
+        report = _restore.load_run(case, run_id)
+        working_rel = report.get("working", "analysis.wav")
+        versions = res.get("versions") or {}
+
+        def tderive(recipe, rel, raw_sha):
+            recipe["steps"].append(_recipe.step(
+                TONE_TOOL, tier="cleaned",
+                version=f"torch {versions.get('torch', '')}",
+                params={"hark_id": hark_id, "label": TONE_LABEL,
+                        "tones": res.get("tones") or [],
+                        "smooth_s": res.get("tone_smooth_s")},
+                inputs={working_rel: w_sha},
+                outputs={(rel / v.name).as_posix(): raw_sha[k]
+                         for k, v in traw.items()},
+                note="each steady line the analysis found, its frequency "
+                     "refined on the whole recording and followed by complex "
+                     "demodulation (a tracking notch about 2 Hz wide), "
+                     "subtracted — a voice harmonic crossing a tone loses "
+                     "what any notch takes"))
+            return [len(recipe["steps"]) - 1]
+
+        _register_result(
+            case, run_id, hark_id, tdir, traw, option=TONE_OPTION,
+            label=TONE_LABEL, derive=tderive,
+            reference=Path(report["folder"]) / working_rel,
+            ref_rel=working_rel, python=python,
+            restore_worker=restore_worker, scratch=scratch, log=log,
+            heartbeat=heartbeat, should_cancel=should_cancel,
+            device=versions.get("device", ""), speech_only=False)
+        st["tone_option"] = TONE_OPTION
     return st
 
 
@@ -1469,6 +2062,10 @@ def census_sentence(res: dict | None, st: dict | None = None) -> str:
         text += (". Steady tones (the analysis's lines): " + ", ".join(
             f"{l['hz']:.0f} Hz (+{l.get('prominence_db') or 0:.0f} dB)"
             for l in lines[:4]) + (" and more" if len(lines) > 4 else ""))
+        if st.get("tone_option"):
+            text += (f" — all {st.get('tones', len(lines))} followed and "
+                     "taken out in the restoration results: the recording "
+                     "without them, and the tones alone (CLEANED)")
     return text + "."
 
 
@@ -1702,7 +2299,8 @@ def _score_chains(case, run_id: str, hark_id: str, folder: Path,
                   working, rate: int, *, python, worker, restore_worker,
                   scratch, ffmpeg, models_root, deepfilter, rnnoise_model,
                   device, log, say, heartbeat, should_cancel,
-                  seconds: float, trained=None,
+                  seconds: float, trained=None, generated=None,
+                  priors=None, prior_worker=None,
                   selftrain_worker=None) -> dict:
     """Increment 2b: the probe, every candidate chain run on it exactly as
     Restore Audio runs it (same steps, same parameters), Move 2 run on it
@@ -1818,6 +2416,52 @@ def _score_chains(case, run_id: str, hark_id: str, folder: Path,
             raise
         except Exception as exc:                          # noqa: BLE001
             failed[spec["option"]] = str(exc)
+    gen = generated or {}
+    found = [p for p in (priors or []) if p and Path(p).is_file()]
+    if gen.get("option") and found:
+        # Move 4 measured like the rest: two guesses on the probe, the noise
+        # model learnt where no phrase was hidden
+        labels[PRIOR_OPTION] = {"label": PRIOR_LABEL, "tier": "invented",
+                                "speech_only": True}
+        say("HARK: the generative lane on the probe…")
+        try:
+            p16 = pdir / "probe16k.wav"
+            if pr.get("rate") != 16000 and not p16.is_file():
+                if not ffmpeg:
+                    raise MediaError("no FFmpeg to make the probe's 16 kHz "
+                                     "copy")
+                _restore._ffmpeg(ffmpeg, [probe], p16, rate=16000, log=log,
+                                 case=case, should_cancel=should_cancel)
+            src = p16 if pr.get("rate") != 16000 else probe
+            spans = sorted((r["start_s"], r["end_s"])
+                           for r in pr.get("phrases") or [])
+            free, at = [], 0.0
+            for a, b in spans:
+                if a - at >= 0.5:
+                    free.append([at, a])
+                at = max(at, b)
+            if float(pr.get("duration_s") or 0.0) - at >= 0.5:
+                free.append([at, float(pr.get("duration_s"))])
+            out = pdir / f"{PRIOR_OPTION}.wav"
+            g = params.get("generate") or {"steps": 30, "em_rounds": 1}
+            _call_worker(
+                {"op": "sample", "wav": os.fspath(src),
+                 "priors": [{"name": Path(found[0]).parent.name,
+                             "path": os.fspath(found[0])}],
+                 "free": free, "samples": 2, "steps": g["steps"],
+                 "em_rounds": 1, "device": device,
+                 "outputs": {"mean": os.fspath(out)}},
+                folder, "probe-generate", case=case, python=python,
+                worker=prior_worker, scratch=scratch, log=log,
+                writes=[out], should_cancel=should_cancel,
+                heartbeat=heartbeat,
+                timeout_s=_timeout(seconds, p_len * g["steps"] * 6),
+                script=PRIOR_WORKER)
+            outputs.append({"id": PRIOR_OPTION, "paths": [os.fspath(out)]})
+        except Cancelled:
+            raise
+        except Exception as exc:                          # noqa: BLE001
+            failed[PRIOR_OPTION] = str(exc)
     say(f"HARK: scoring {len(outputs)} restoration(s) against the clean "
         "phrases…")
     sc = _call_worker(
@@ -1862,10 +2506,14 @@ def _record_map(case, run_dir: Path, folder: Path, w_sha: str, report: dict,
     png = folder / MAP_FILE
     if not png.is_file():
         return {}
-    sha = hashing.hash_case_file(png).sha256
-    rel = png.relative_to(run_dir).as_posix()
+    produced = {}
+    for f in (png, folder / PROVENANCE_FILE):
+        if f.is_file():
+            produced[f.relative_to(run_dir).as_posix()] = \
+                hashing.hash_case_file(f).sha256
+    sha = "|".join(produced[k] for k in sorted(produced))
     if state.get("map_sha256") == sha:
-        return {rel: sha}
+        return produced
     recipe = _recipe.load_recipe(run_dir)
     recipe["steps"].append(_recipe.step(
         HUNT_TOOL, tier="measured",
@@ -1874,12 +2522,14 @@ def _record_map(case, run_dir: Path, folder: Path, w_sha: str, report: dict,
                 "surrogates": (_response(folder, "hunt") or {})
                 .get("surrogates")},
         inputs={report.get("working", "analysis.wav"): w_sha},
-        outputs={rel: sha},
+        outputs=dict(produced),
         note="voiced sound found by its pitch track, false alarms measured "
-             "on this file's own noise — a measurement, nothing changed"))
+             "on this file's own noise — a measurement, nothing changed"
+             + ("; the provenance map adds one lane per tier beneath it"
+                if len(produced) > 1 else "")))
     _case.write_json_atomic(case.root, run_dir / _recipe.RECIPE_FILE, recipe)
     state["map_sha256"] = sha
-    return {rel: sha}
+    return produced
 
 
 # ---------------------------------------------------------------------------
@@ -1914,6 +2564,7 @@ def load(case, run_id: str, hark_id: str) -> dict:
     out = dict(state, folder=os.fspath(folder), hunt=hunt, calibrate=cal,
                extract=_response(folder, "extract"),
                census=_response(folder, "census"),
+               consonants=_response(folder, "consonants"),
                score=_response(folder, "score"), audit=aud)
     if hunt is not None:
         vh = voice_hunt(folder, hunt, (state.get("stages") or {}).get("loop"))
@@ -1921,6 +2572,10 @@ def load(case, run_id: str, hark_id: str) -> dict:
             out["loop_hunt"] = vh
     if (folder / MAP_FILE).is_file():
         out["map_path"] = os.fspath(folder / MAP_FILE)
+    prov = _response(folder, "provenance")
+    if prov and (folder / PROVENANCE_FILE).is_file():
+        out["provenance_path"] = os.fspath(folder / PROVENANCE_FILE)
+        out["provenance"] = prov
     out["flags"] = audit_flags(aud, state)
     out["choice"] = chain_choice(out)
     out["verdict"] = verdict(out)
@@ -2226,10 +2881,17 @@ def verdict(result: dict) -> list[str]:
         lines.append(extract_sentence(result["extract"]))
     if stages.get("loop"):
         lines.append(loop_sentence(stages["loop"]))
+    if stages.get("consonants"):
+        lines.append(consonant_sentence(result.get("consonants"),
+                                        stages["consonants"]))
     if result.get("census") is not None:
         lines.append(census_sentence(result["census"], stages.get("census")))
+    if stages.get("tse"):
+        lines.append(tse_sentence(stages["tse"]))
     if stages.get("selftrain"):
         lines.append(selftrain_sentence(stages["selftrain"]))
+    if stages.get("generate"):
+        lines.append(generate_sentence(stages["generate"]))
     ss = stages.get("score") or {}
     if ss.get("skipped"):
         lines.append("Restorations not scored: " + ss.get("note", "") + ".")
@@ -2253,7 +2915,9 @@ def verdict(result: dict) -> list[str]:
                          f"voice the input lacks, {removed} removed voice, "
                          f"{revealed} made a possible voice clear — each "
                          "listed below.")
-    lines.append("Not yet: the generative lane (Move 4).")
+    lines.append("Not yet: M1 (asking the recording which reading it "
+                 "supports — it needs a local voice to read candidates "
+                 "with).")
     return lines
 
 

@@ -1000,6 +1000,12 @@ def map_png(path, g, grid: Grid, segs) -> dict:
     track's pitch and next three harmonics drawn in its colour (detected
     bright, possible dim). Returns the axes: linear in frequency, row 0 at
     `top_hz`, the last row at 0 Hz."""
+    img, axes = _map_image(g, grid, segs)
+    write_png(path, img)
+    return axes
+
+
+def _map_image(g, grid: Grid, segs):
     import torch
     T = g.shape[0]
     top_bin = min(g.shape[1], int(MAP_TOP_HZ / grid.df) + 1)
@@ -1041,10 +1047,100 @@ def map_png(path, g, grid: Grid, segs) -> dict:
                     yy = y + dy
                     if 0 <= yy < H:
                         img[yy, x] = c
-    write_png(path, img)
-    return {"width": int(W), "height": int(H),
-            "top_hz": round(float(max(1, top_bin - 1) * grid.df), 1),
-            "scale": "linear"}
+    return img, {"width": int(W), "height": int(H),
+                 "top_hz": round(float(max(1, top_bin - 1) * grid.df), 1),
+                 "scale": "linear"}
+
+
+# --- the provenance map -------------------------------------------------------
+#
+# The hunt's map with, under it, one lane per tier — how each thing on the
+# page was produced, coloured as ATK colours tiers: what HARK MEASURED (the
+# voices it found, consonants, pulsing sources), what it CLEANED (Move 2's
+# voice, machines and tones taken out), what it INFERRED (Move 3's trained
+# denoiser), what was INVENTED (Move 4's guesses), and what the AUDIT
+# flagged. Time runs across both, aligned.
+
+LANE_H = 14
+LANE_GAP = 2
+LANES = ("measured", "cleaned", "inferred", "invented", "audit")
+LANE_COLOURS = {"measured": (76, 141, 255), "cleaned": (79, 214, 208),
+                "inferred": (185, 140, 240), "invented": (230, 179, 74),
+                "audit": (239, 111, 108)}
+MACHINE_COLOUR = (185, 140, 240)
+
+
+def provenance_op(req) -> dict:
+    import torch
+    device = _device(req.get("device", "auto"))
+    x, rate = read_wav(req["wav"])
+    hunt = req["hunt"]
+    gr = hunt.get("grid") or {}
+    grid = Grid(rate, int(gr.get("steps_per_octave", 36)),
+                (gr.get("top_hz") or rate / 2) + 1)
+    lp = log_power(x, grid, device)
+    g = whiten(lp, torch.tensor(hunt["log_noise"]) if hunt.get("log_noise")
+               else noise_log_mean(lp), grid)
+    T = g.shape[0]
+    segs = []
+    flags = machine_flags(hunt.get("segments") or [])
+    for s, mach in zip(hunt.get("segments") or [], flags):
+        if s.get("status") not in ("detected", "possible"):
+            continue
+        a = int(round(float(s["start_s"]) / HOP_S))
+        f = s.get("f0_hz") or []
+        states = [grid.state_of(v) if v else -1 for v in f]
+        segs.append({"track": s.get("track", 1), "status": s["status"],
+                     "start": a, "end": min(T, a + len(states)),
+                     "states": states, "machine": mach})
+    img, axes = _map_image(g, grid, [x for x in segs if not x["machine"]])
+    H, W = img.shape[0], img.shape[1]
+    # machines drawn over in violet
+    top_bin = max(1, int(axes["top_hz"] / grid.df))
+    for sg in (x for x in segs if x["machine"]):
+        c = torch.tensor(MACHINE_COLOUR, dtype=torch.uint8)
+        for t, j in zip(range(sg["start"], sg["end"]), sg["states"]):
+            if j < 0:
+                continue
+            xx = int(t * (W - 1) / max(1, T - 1))
+            for k in (1, 2, 3, 4):
+                f = k * float(grid.f0[j])
+                if f >= axes["top_hz"]:
+                    break
+                yy = int((1.0 - (f / grid.df) / top_bin) * (H - 1))
+                if 0 <= yy < H:
+                    img[yy, xx] = c
+    dur = x.numel() / rate
+    lanes = req.get("lanes") or {}
+    strip = torch.full((len(LANES) * (LANE_H + LANE_GAP), W, 3), 21,
+                       dtype=torch.uint8)
+    drawn = {}
+    for i, lane in enumerate(LANES):
+        y0 = i * (LANE_H + LANE_GAP)
+        strip[y0:y0 + LANE_H] = torch.tensor((28, 34, 44), dtype=torch.uint8)
+        base = torch.tensor(LANE_COLOURS[lane], dtype=torch.float32)
+        n = 0
+        for span in lanes.get(lane) or []:
+            a, b = float(span[0]), float(span[1])
+            weight = float(span[2]) if len(span) > 2 else 1.0
+            xa = int(max(0.0, a) / max(1e-9, dur) * (W - 1))
+            xb = max(xa + 1, int(min(dur, b) / max(1e-9, dur) * (W - 1)) + 1)
+            c = (base * (0.45 + 0.55 * max(0.0, min(1.0, weight)))).to(
+                torch.uint8)
+            strip[y0 + 2:y0 + LANE_H - 2, xa:xb] = c
+            n += 1
+        drawn[lane] = n
+    out_img = torch.cat([img, torch.full((LANE_GAP * 2, W, 3), 14,
+                                         dtype=torch.uint8), strip], 0)
+    write_png(req["png"], out_img)
+    _say(f"provenance map: {W}x{out_img.shape[0]}, lanes "
+         + ", ".join(f"{k} {v}" for k, v in drawn.items()))
+    return {"map": dict(axes, height=int(out_img.shape[0]),
+                        spectrogram_height=int(H),
+                        lane_top=int(H + LANE_GAP * 2), lane_h=LANE_H,
+                        lane_gap=LANE_GAP, lanes=list(LANES)),
+            "drawn": drawn, "duration_s": round(dur, 3),
+            "versions": _versions(device)}
 
 
 def quiet_half(x, rate: int, block_s: float = 4.0):
@@ -2573,6 +2669,68 @@ def _merge_harmonics(items: list) -> list:
     return out
 
 
+#: Steady tones (the analysis's lines, a machine that runs the whole file):
+#: each one's frequency refined on the whole recording (within +/-
+#: TONE_SEARCH_HZ), then followed by complex demodulation with a
+#: TONE_SMOOTH_S Hann window — a tracking notch about 2 Hz wide that takes
+#: the tone's coherent part out and leaves everything else. Measured
+#: 2026-11-11 (two tones, one drifting, under white noise and a voice):
+#: the tones 24.5 dB down; from a voice whose harmonic crosses a tone's
+#: frequency it takes 13.7 dB below the voice (as any notch would); from
+#: noise 34 dB below it. 0.5 s windows took more of the voice, 2 s left
+#: more of a drifting tone.
+TONE_SEARCH_HZ = 2.0
+TONE_SMOOTH_S = 1.0
+TONE_MAX = 32
+
+
+def _smooth(z, win):
+    """z convolved with an odd-length window, centred, by FFT (a long
+    window by direct convolution would need gigabytes)."""
+    import torch
+    n, L = z.numel(), win.numel()
+    m = 1 << (n + L - 1 - 1).bit_length()
+    y = torch.fft.irfft(torch.fft.rfft(z, m) * torch.fft.rfft(win, m), m)
+    return y[L // 2:L // 2 + n]
+
+
+def cancel_tones(x, rate: int, freqs, device: str = "cpu"):
+    """(the tones, info) — each steady line refined and followed."""
+    import torch
+    xd = x.to(device, torch.float64)
+    t = torch.arange(xd.numel(), device=device, dtype=torch.float64) / rate
+    tones = torch.zeros_like(xd)
+    L = max(3, int(TONE_SMOOTH_S * rate)) | 1
+    win = torch.hann_window(L, periodic=False, dtype=torch.float64,
+                            device=device)
+    win = win / win.sum()
+    info = []
+    for f0 in [float(f) for f in freqs][:TONE_MAX]:
+        if not 20.0 <= f0 < 0.45 * rate:
+            continue
+        # refine: the frequency where the whole file's projection peaks
+        step = 1.0 / max(1.0, float(t[-1]) * 4.0)
+        grid = torch.arange(f0 - TONE_SEARCH_HZ, f0 + TONE_SEARCH_HZ + step,
+                            step, device=device, dtype=torch.float64)
+        best, bp = f0, -1.0
+        for chunk in grid.split(64):
+            ph = 2 * math.pi * chunk[:, None] * t[None, ::4]
+            pw = ((xd[None, ::4] * torch.cos(ph)).sum(1) ** 2
+                  + (xd[None, ::4] * torch.sin(ph)).sum(1) ** 2)
+            i = int(pw.argmax())
+            if float(pw[i]) > bp:
+                best, bp = float(chunk[i]), float(pw[i])
+        r = (xd - tones)
+        ph = 2 * math.pi * best * t
+        zr = _smooth(r * torch.cos(ph), win)
+        zi = _smooth(r * torch.sin(ph), win)
+        line = 2.0 * (zr * torch.cos(ph) + zi * torch.sin(ph))
+        tones += line
+        info.append({"hz": round(f0, 2), "refined_hz": round(best, 3),
+                     "rms": round(float(line.pow(2).mean().sqrt()), 6)})
+    return tones.to(x.dtype).cpu(), info
+
+
 def census_op(req) -> dict:
     """Move 8: what pulses (DEMON on the band envelopes) and what hums (the
     hunt's steady tracks, which the parent names machines) — and, for the
@@ -2605,6 +2763,15 @@ def census_op(req) -> dict:
         out["cycles"] = MACHINE_CYCLES
         out["top_hz"] = round(top, 1)
         _say(f"census: {len(info)} machine(s) taken out along their pitch")
+    lines = [float(l["hz"]) for l in req.get("lines") or []]
+    touts = req.get("tone_outputs") or {}
+    if lines and touts:
+        tones, tinfo = cancel_tones(x, rate, lines, device)
+        write_wav(touts["without"], x - tones, rate)
+        write_wav(touts["tones"], tones, rate)
+        out["tones"] = tinfo
+        out["tone_smooth_s"] = TONE_SMOOTH_S
+        _say(f"census: {len(tinfo)} steady tone(s) followed and taken out")
     return out
 
 
@@ -2808,6 +2975,138 @@ def score_op(req) -> dict:
     return {"scores": out, "gaps": len(gaps)}
 
 
+# --- M3: consonants where the vowels say they must be ------------------------
+#
+# Nearly every syllable has a vowel at its core, so a consonant sits just
+# before or after the voiced islands the hunter finds. M3 searches ONLY those
+# margins (30-150 ms either side of each DETECTED voice stretch), and only in
+# the band where fricatives and bursts live (2-8 kHz, or to the recording's
+# own top), for a short burst of energy above the file's own noise in that
+# band. The null is the file's own noise: the same statistic over margins
+# laid at random in its voice-free stretches — real noise, unevenness and
+# all — so each margin gets a p-value, and Benjamini-Hochberg across all the
+# margins tested holds the share of false finds. A probability that a
+# consonant is there (Measured), never audio.
+
+CONS_NEAR_S, CONS_FAR_S = 0.03, 0.15
+CONS_LO_HZ, CONS_HI_HZ = 2000.0, 8000.0
+CONS_WIN_S, CONS_HOP_S = 0.016, 0.004
+CONS_BURST_S = 0.02            # the burst a margin's score is the best of
+CONS_NULL = 4000               # random margins in the noise
+CONS_Q = 0.1                   # Benjamini-Hochberg: false finds held to 10%
+CONS_POSSIBLE_P = 0.05
+
+
+def _cons_frames(x, rate, top_hz, device):
+    """Whitened energy in the consonant band, one value per 4 ms frame:
+    each bin's power over the noise's median power in that bin, averaged
+    over the band, in dB."""
+    import torch
+    win = int(round(CONS_WIN_S * rate))
+    hop = int(round(CONS_HOP_S * rate))
+    n_fft = 1 << (win - 1).bit_length()
+    X = torch.stft(x.to(device), n_fft, hop, win,
+                   torch.hann_window(win, device=device), center=True,
+                   return_complex=True)
+    P = X.abs() ** 2
+    df = rate / n_fft
+    lo = int(math.ceil(CONS_LO_HZ / df))
+    hi = int(min(CONS_HI_HZ, top_hz, 0.47 * rate) / df)
+    if hi - lo < 4:
+        raise ValueError("the recording holds nothing above 2 kHz — no band "
+                         "to hunt consonants in")
+    return P[lo:hi], hop / rate, (lo * df, hi * df)
+
+
+def _cons_score(E, a: int, b: int, k: int):
+    """The margin's score: the loudest k-frame burst inside frames [a, b)."""
+    import torch
+    seg = E[a:b]
+    if seg.numel() < k:
+        return float("-inf")
+    return float(torch.nn.functional.avg_pool1d(seg[None, None], k, 1)
+                 .max())
+
+
+def consonants_op(req) -> dict:
+    import torch
+    device = req.get("device") or "cpu"
+    x, rate = read_wav(req["wav"])
+    hunt = req["hunt"]
+    top = float((hunt.get("grid") or {}).get("top_hz") or rate / 2)
+    P, hop_s, band = _cons_frames(x, rate, top, device)
+    n = P.shape[1]
+    segs = [s for s, m in zip(hunt.get("segments") or [],
+                              machine_flags(hunt.get("segments") or []))
+            if s.get("status") == "detected" and not m]
+    voiced = sorted((float(s["start_s"]), float(s["end_s"])) for s in segs)
+    free = [(float(a), float(b)) for a, b in hunt.get("free") or []]
+    # the noise's own spectrum in the band: the median over voice-free frames
+    fmask = torch.zeros(n, dtype=torch.bool)
+    for a, b in free:
+        fmask[int(a / hop_s):int(b / hop_s)] = True
+    if int(fmask.sum()) < int(2.0 / hop_s):
+        raise ValueError("under 2 s of voice-free noise — too little to "
+                         "measure the consonant band's own noise against")
+    noise = P[:, fmask.to(P.device)].median(dim=1).values.clamp(min=1e-20)
+    E = (10.0 * torch.log10((P / noise[:, None]).mean(dim=0)
+                            .clamp(min=1e-12))).cpu()
+    k = max(1, int(round(CONS_BURST_S / hop_s)))
+    near, far = int(round(CONS_NEAR_S / hop_s)), int(round(CONS_FAR_S / hop_s))
+    width = far - near
+
+    def clear(a_s, b_s):
+        return not any(a_s < vb and va < b_s for va, vb in voiced)
+
+    margins = []
+    for i, (va, vb) in enumerate(voiced):
+        for side, a_s, b_s in (("before", va - CONS_FAR_S, va - CONS_NEAR_S),
+                               ("after", vb + CONS_NEAR_S, vb + CONS_FAR_S)):
+            if a_s < 0 or b_s * 1.0 > n * hop_s or not clear(a_s, b_s):
+                continue
+            a, b = int(round(a_s / hop_s)), int(round(b_s / hop_s))
+            margins.append({"voice": i, "side": side,
+                            "start_s": round(a_s, 3), "end_s": round(b_s, 3),
+                            "score_db": round(_cons_score(E, a, b, k), 2)})
+    # the null: the same window at random in the voice-free noise
+    gen = torch.Generator().manual_seed(int(req.get("seed", 4321)))
+    spans = [(int(a / hop_s), int(b / hop_s) - width) for a, b in free
+             if int(b / hop_s) - int(a / hop_s) > width]
+    lens = torch.tensor([max(0, b - a) for a, b in spans], dtype=torch.float)
+    null = []
+    if spans and float(lens.sum()) > 0:
+        pick = torch.multinomial(lens, CONS_NULL, replacement=True,
+                                 generator=gen)
+        for j in pick.tolist():
+            a, b = spans[j]
+            o = a + int(torch.randint(0, max(1, b - a), (1,), generator=gen))
+            null.append(_cons_score(E, o, o + width, k))
+    null_t = torch.tensor(sorted(null)) if null else torch.zeros(0)
+    for m in margins:
+        ge = int((null_t >= m["score_db"]).sum()) if null else 0
+        m["p"] = round((1 + ge) / (1 + len(null)), 5)
+    # Benjamini-Hochberg across the margins tested
+    order = sorted(range(len(margins)), key=lambda i: margins[i]["p"])
+    passed = 0
+    for rank, i in enumerate(order, 1):
+        if margins[i]["p"] <= CONS_Q * rank / max(1, len(margins)):
+            passed = rank
+    for rank, i in enumerate(order, 1):
+        m = margins[i]
+        m["status"] = ("likely" if rank <= passed else
+                       "possible" if m["p"] <= CONS_POSSIBLE_P else "none")
+    found = sum(m["status"] == "likely" for m in margins)
+    _say(f"consonants: {len(margins)} margins beside {len(voiced)} voice "
+         f"stretch(es), {found} likely")
+    return {"margins": margins, "band_hz": [round(band[0]), round(band[1])],
+            "voices": len(voiced), "null_margins": len(null),
+            "null_p95_db": round(float(null_t[int(0.95 * (len(null) - 1))]), 2)
+            if null else None,
+            "q": CONS_Q, "found": found,
+            "expected_false": round(CONS_Q * found, 2),
+            "versions": _versions(device)}
+
+
 def run(request_path: str, response_path: str) -> int:
     started = time.monotonic()
     with open(request_path, "r", encoding="utf-8") as fh:
@@ -2827,6 +3126,10 @@ def run(request_path: str, response_path: str) -> int:
         out = score_op(req)
     elif op == "census":
         out = census_op(req)
+    elif op == "consonants":
+        out = consonants_op(req)
+    elif op == "provenance":
+        out = provenance_op(req)
     else:
         raise ValueError(f"unknown op {op!r}")
     out["op"] = op

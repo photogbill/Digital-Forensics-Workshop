@@ -92,6 +92,10 @@ TOOL_TIERS = {
     "forensics_workshop hark_worker harmonic extraction": "cleaned",
     "forensics_workshop hark_worker probe": "measured",
     "forensics_workshop hark_worker machine cancellation": "cleaned",
+    "forensics_workshop hark_worker tone cancellation": "cleaned",
+    "forensics_workshop prior_worker posterior sampling": "invented",
+    "forensics_workshop clearervoice_worker MossFormer2_SS_16K steered by "
+    "Move 2's voice": "inferred",
     "forensics_workshop selftrain_worker GTCRN trained on this file":
         "inferred",
     "forensics_workshop selftrain_worker GTCRN published weights":

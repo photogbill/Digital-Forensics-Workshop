@@ -1,7 +1,7 @@
 # Notices — media recovery (FORENSICS_PLAN §12.9, §12.10, §13)
 
-Nothing below is bundled in this repository except one port of code,
-GTCRN's network (below). The engine runs these components as **separate
+Nothing below is bundled in this repository except two ports of code,
+GTCRN's network and ClearerVoice's MossFormer2_SS_16K network (below). The engine runs these components as **separate
 processes** with weights the operator downloads; these notices travel with
 the code that drives them.
 
@@ -92,4 +92,29 @@ them unless their SHA-256 is
 `a630d992cf792daf4ce2bb5bcf9c4d389f740a8f09c6e0971184697fe6371b79`, and
 saves the licence text beside them. Weights HARK trains on a case's file
 stay in that case.
+
+## ClearerVoice-Studio MossFormer2_SS_16K — Alibaba, Apache-2.0
+
+HARK's target-speaker extraction (Move 7, `clearervoice_worker.py`) uses
+**MossFormer2_SS_16K** from **ClearerVoice-Studio**
+(<https://github.com/modelscope/ClearerVoice-Studio>, Shengkui Zhao et al.,
+"MossFormer2: Combining Transformer and RNN-Free Recurrent Network for
+Enhanced Time-Domain Monaural Speech Separation", ICASSP 2024). Its network is
+**ported** into `clearervoice_worker.py` — the same layers and parameter
+names, einops and rotary-embedding-torch replaced by plain torch — under the
+Apache License 2.0, whose notice is at the top of that file. Its MaskNet,
+Encoder and Decoder are modified from SpeechBrain's `dual_path.py`
+(Apache-2.0); its rotary position embedding follows Phil Wang's
+`rotary-embedding-torch` 0.8.3 (MIT, "Copyright (c) 2021 Phil Wang").
+ATK's `get_speechbrain.bat` downloads the published weights,
+`last_best_checkpoint.pt` from <https://huggingface.co/alibabasglab/MossFormer2_SS_16K>
+at commit `407cb030cd66340918ebb6c8cc63b18f8592cdbe`, into
+`models\clearervoice\MossFormer2_SS_16K\`, refuses them unless their SHA-256
+is `00a3a48bda492db1e829b85dd443f8f43a43039a3e90f1a24962ea9caf14a11a`, and
+saves the model card (its Apache-2.0 statement) and the licence text beside
+them. The weights are published under Apache-2.0; they were trained on
+two-speaker mixtures built from corpora such as WSJ0-2mix, whose source
+recordings are LDC-licensed — the weights' licence, not the corpus's, is
+what this project relies on. Every HARK run that uses them first separates
+two clean phrases and keeps nothing unless they come apart by at least 3 dB.
 

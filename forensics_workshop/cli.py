@@ -48,9 +48,10 @@
     python -m forensics_workshop restore-run     CASE RUN_ID --examiner NAME --ffmpeg EXE --python EXE --scratch DIR --models-root DIR [--option ID]... [--all] [--force] [--device auto] [--deepfilter EXE] [--rnnoise-model FILE]
     python -m forensics_workshop restore-list    CASE --examiner NAME [--id RUN_ID]
     python -m forensics_workshop restore-export  CASE RUN_ID FILE --examiner NAME
-    python -m forensics_workshop hark            CASE RUN_ID --examiner NAME --python EXE --scratch DIR [--budget quick|thorough|overnight|day] [--ffmpeg EXE --phrases DIR] [--models-root DIR --deepfilter EXE --rnnoise-model FILE --gtcrn-weights FILE] [--resume HARK_ID] [--device auto]
+    python -m forensics_workshop hark            CASE RUN_ID --examiner NAME --python EXE --scratch DIR [--budget quick|thorough|overnight|day] [--ffmpeg EXE --phrases DIR] [--models-root DIR --deepfilter EXE --rnnoise-model FILE --gtcrn-weights FILE --clearervoice-weights FILE] [--resume HARK_ID] [--device auto]
     python -m forensics_workshop hark-list       CASE RUN_ID --examiner NAME [--id HARK_ID]
     python -m forensics_workshop hark-export     CASE RUN_ID HARK_ID --examiner NAME
+    python -m forensics_workshop hark-stack      CASE --examiner NAME --model-dir DIR --python EXE --ffmpeg EXE [--device auto] [--list]
   drive acquisition (2026-10-29) — image a drive to E01 or RAW, verified
     python -m forensics_workshop drives
     python -m forensics_workshop corpus      CASE E001 --examiner NAME [--families image,video,document,text,email] [--deleted] [--path TEXT]
@@ -94,6 +95,7 @@ from .artefacts import mobile as _mobile
 from .artefacts import query as _query
 from .media import restore as _restore
 from .media import hark as _hark
+from .media import hark_stack as _hark_stack
 from .media import voiceprint as _voice
 from .case import Case
 from .errors import ForensicsError
@@ -841,6 +843,7 @@ def cmd_hark(args) -> int:
                        deepfilter=args.deepfilter or None,
                        rnnoise_model=args.rnnoise_model or None,
                        gtcrn_weights=args.gtcrn_weights or None,
+                       clearervoice_weights=args.clearervoice_weights or None,
                        progress=_progress)
     _print_hark(result)
     return 0
@@ -862,6 +865,21 @@ def cmd_hark_list(args) -> int:
 
 def cmd_hark_export(args) -> int:
     _print(_hark.export_map(_open(args), args.run_id, args.hark_id))
+    return 0
+
+
+def cmd_hark_stack(args) -> int:
+    case = _open(args)
+    if args.list:
+        for r in _hark_stack.list_stacks(case):
+            print(f"{r['id']:34} {r.get('created_at', '')}  "
+                  f"{len(r.get('recordings') or [])} recording(s), "
+                  f"{len(r.get('voices') or [])} voice(s)")
+        return 0
+    result = _hark_stack.stack(case, model_dir=args.model_dir,
+                               ffmpeg=args.ffmpeg, python=args.python or None,
+                               device=args.device, progress=_progress)
+    _print(result | {"members": _hark_stack.member_rows(result)})
     return 0
 
 
@@ -1230,6 +1248,9 @@ def build_parser() -> argparse.ArgumentParser:
     hk.add_argument("--gtcrn-weights", default="",
                     help="GTCRN's published weights, for the denoiser that "
                          "trains on this file (Move 3)")
+    hk.add_argument("--clearervoice-weights", default="",
+                    help="ClearerVoice's MossFormer2_SS_16K weights, for the "
+                         "target speaker (Move 7)")
     hl = with_case("hark-list", cmd_hark_list,
                    "a restoration run's HARK runs")
     hl.add_argument("run_id")
@@ -1238,6 +1259,17 @@ def build_parser() -> argparse.ArgumentParser:
                    "copy a HARK run's map into the case's exports")
     hx.add_argument("run_id")
     hx.add_argument("hark_id")
+    hs = with_case("hark-stack", cmd_hark_stack,
+                   "HARK M5: one voice stacked across every recording HARK "
+                   "has run on in the case (a lead, never audio)")
+    hs.add_argument("--model-dir", default="",
+                    help="the voice model folder (spkrec-ecapa-voxceleb)")
+    hs.add_argument("--python", default="", help="a Python with torch")
+    hs.add_argument("--ffmpeg", default="")
+    hs.add_argument("--device", default="auto",
+                    choices=["auto", "cuda", "cpu"])
+    hs.add_argument("--list", action="store_true",
+                    help="list the case's earlier stacks")
 
     cp = with_case("corpus", cmd_corpus, "what a model hunt would look at: "
                    "images, video, documents, text, email", evidence=True)

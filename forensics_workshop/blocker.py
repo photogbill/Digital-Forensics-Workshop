@@ -99,7 +99,8 @@ NOATIME_FLAG = getattr(os, "O_NOATIME", 0)
 #:               the read-only ones — asserted with `acquire.assert_query_only`
 #:   worker-output  what a worker process writes (`media/vp_worker.py`,
 #:               `media/restore_worker.py`, `media/hark_worker.py`,
-#:               `media/selftrain_worker.py` — run as their own processes,
+#:               `media/selftrain_worker.py`, `media/clearervoice_worker.py`,
+#:               `media/prior_worker.py` — run as their own processes,
 #:               never imported): every path is put through the case or
 #:               harness guard by the parent's `assert_child_writes` before
 #:               the worker starts — the worker itself cannot import it
@@ -146,6 +147,11 @@ WRITERS = {
     "media.restore_worker:_write_bytes": "worker-output",
     "media.hark_worker:_write_bytes": "worker-output",
     "media.selftrain_worker:_write_bytes": "worker-output",
+    "media.clearervoice_worker:_write_bytes": "worker-output",
+    "media.prior_worker:_write_bytes": "worker-output",
+    "media.prior_worker:_append_text": "worker-output",
+    "media.prior_worker:_ensure_dir": "worker-output",
+    "media.prior_worker:_decode": "worker-output",
 }
 
 

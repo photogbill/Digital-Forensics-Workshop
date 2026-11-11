@@ -27,7 +27,9 @@ FORBIDDEN_ROOTS = {"atk", "PySide6", "PySide2", "PyQt5", "PyQt6", "shiboken6",
 WORKER_SCRIPTS = {"media/vp_worker.py": {"torch", "speechbrain"},
                   "media/restore_worker.py": {"torch", "speechbrain"},
                   "media/hark_worker.py": {"torch"},
-                  "media/selftrain_worker.py": {"torch"}}
+                  "media/selftrain_worker.py": {"torch"},
+                  "media/clearervoice_worker.py": {"torch"},
+                  "media/prior_worker.py": {"torch"}}
 
 
 def _sources():

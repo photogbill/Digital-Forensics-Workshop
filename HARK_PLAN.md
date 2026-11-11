@@ -1,30 +1,115 @@
 # HARK — pulling voices and sounds out of noise
 
-## Build status — 2026-11-11
+## Build status — 2026-11-11 (night): everything buildable is built
 
-**Built: increments 1–5 of the build order below, Move 3 (with M4), Move 7
-part one and Move 8** — the hunter and surrogates, the per-file CEP, chain
-choice on injected phrases, the auditor, Move 2 (warp and cyclic
-extraction), the denoiser trained on the file itself, the speaker loop's
-pitch-range narrowing, and the census of other sounds. **Not built: Move 4**
-(the generative lane — it needs a speech prior trained on your GPU) and the
-mad moves other than M4.
+**Built: every move of the plan except M1** — the hunter and surrogates,
+the per-file CEP, chain choice on injected phrases, the auditor, Move 2,
+Move 3 (with M4), Move 4 (with M2 and M6), Move 7 (both halves), Move 8,
+M3 (consonants), M5 (stacking across a case), and the provenance map.
+**Not built: M1** (asking the recording which reading it supports — it needs
+a local text-to-speech that reads candidate words in the speaker's voice,
+and ATK has none). **Waiting on you: the speech prior** — Move 4's code is
+complete and tested at toy scale, but a useful prior must be trained on
+your GPU (`train_prior.bat`, days).
 
-Tiers: hunt, calibrate, loop, census, score and audit are **Measured**;
-Move 2's outputs and the machine cancellation are **Cleaned**; Move 3's
-outputs are **Inferred**.
+Tiers: hunt, calibrate, loop, consonants, census, score, audit and the
+stack are **Measured**; Move 2's outputs, machine and tone cancellation are
+**Cleaned**; Move 3 and ClearerVoice are **Inferred**; Move 4 is
+**Invented** (its files end `.invented.wav`).
 
 | Where | What |
 | --- | --- |
-| `forensics_workshop/media/hark.py` | The engine: eight stages (hunt, calibrate, loop, extract, census, selftrain, score, audit), each checkpointed in `hark.json` (a stopped run resumes), `media.hark.*` custody, every step in the run's recipe |
-| `forensics_workshop/media/hark_worker.py` | The torch worker (ops `hunt`, `calibrate`, `extract`, `census`, `probe`, `score`, `audit`), run in `envs\atk_audio` like `restore_worker` |
-| `forensics_workshop/media/selftrain_worker.py` | Move 3's worker: GTCRN (MIT, about 48 000 parameters, 16 kHz) ported to plain torch, trained on the file (`selftrain`) and applied (`apply`) |
-| `forensics_workshop/media/restore.py` | One small change: `_run_option` can put an option's folder elsewhere and skip its custody event, so HARK runs every chain on its probe exactly as Restore Audio runs it |
-| CLI | `hark` (with `--models-root`, `--deepfilter`, `--rnnoise-model`, `--gtcrn-weights`), `hark-list`, `hark-export` |
-| ATK | The HARK section on the Restore Audio page: budget, Run HARK, verdict, map, tracks (machines and speaker-loop stretches marked), CEP, the census table, the restorations scored on this file's noise (best marked), audit flags, earlier runs, Finish stopped run. Move 2's VOICE and LIFT, Move 3's outputs and the machine cancellation appear in the results table like any option. `get_speechbrain.bat` fetches GTCRN's published weights (pinned commit, SHA-256 checked) |
-| Tests | `tests/test_hark.py` (engine through fake workers; the science tests run the real workers when torch is present); ATK `test_dfw_pages_build.py` drives the page |
+| `forensics_workshop/media/hark.py` | The engine: twelve stages (hunt, calibrate, loop, extract, consonants, census, tse, selftrain, generate, score, audit, map), each checkpointed in `hark.json`, `media.hark.*` custody, every step in the run's recipe |
+| `forensics_workshop/media/hark_worker.py` | The torch worker (ops `hunt`, `calibrate`, `extract`, `consonants`, `census`, `provenance`, `probe`, `score`, `audit`) |
+| `forensics_workshop/media/selftrain_worker.py` | Move 3: GTCRN (MIT) ported to torch, trained on the file and applied |
+| `forensics_workshop/media/clearervoice_worker.py` | Move 7, second half: ClearerVoice's MossFormer2_SS_16K (Apache-2.0) ported to torch, steered to one speaker; a self-check on every run |
+| `forensics_workshop/media/prior_worker.py` | Move 4, M2, M6: our own score model, its training (prepare, train, resume), posterior sampling, the uncertainty map |
+| `forensics_workshop/media/hark_stack.py` | M5: one voice stacked across every recording HARK ran on in the case |
+| CLI | `hark` (with `--gtcrn-weights`, `--clearervoice-weights`), `hark-list`, `hark-export`, `hark-stack` |
+| ATK | The HARK section on Restore Audio: budget, Run HARK, verdict, the provenance map, tracks (machines and speaker-loop stretches marked), CEP, consonants, census, scored restorations, audit flags, earlier runs, and "Stack voices across the case" with its table. `get_speechbrain.bat` fetches GTCRN's and ClearerVoice's weights (pinned, SHA-256 checked); `train_prior.bat` trains the speech prior |
 
-### What is new on 2026-11-11
+### What the budgets run
+
+| Stage | Quick | Thorough | Overnight | Full day |
+| --- | --- | --- | --- | --- |
+| Speaker loop rounds | 1 | 2 | 3 | 4 |
+| ClearerVoice (target speaker) | – | yes | yes | yes |
+| Move 3 | fine-tune 4 min | fine-tune 30 min | + from nothing (M4) | + from nothing (M4) |
+| Move 4 samples × steps | – | 4 × 30 | 16 × 50, prior swap (M2) | 32 × 80, M2, M6 |
+
+### New in the night build
+
+**M3 — consonants beside the vowels (Measured, no audio).** Only the
+30–150 ms either side of each DETECTED voice stretch are searched, only in
+the fricative band (2–8 kHz or the file's top), for a 20 ms burst above the
+file's own noise there. Each margin's p-value comes from 4000 margins laid
+at random in the file's voice-free noise; Benjamini–Hochberg across the
+margins holds false finds to 10%. *Measured* (60 s of pink noise, 60 ms
+fricative bursts 120 ms before every other voiced stretch): bursts level
+with the band's noise 11 of 11 likely; 3 dB under it 7 of 11; 6 dB under
+none; the empty margins 0 of 33 likely and 2 possible, as chance allows.
+
+**M5 — one voice stacked across a case (Measured, a lead).** Every
+recording HARK has finished on (one per file) is embedded stretch by stretch
+with the voice model (ECAPA); recordings whose strong voices agree in voice
+and pitch make one voice; then every other recording's faint stretches are
+matched to it and stacked. "Voice A: DETECTED in 3 recordings, faintly in 6
+more of 40." Thresholds are the voice model's raw cosine (0.40 to join, its
+own 0.25 for a faint match) with pitch within 25% — uncalibrated unless the
+case has a calibration.
+
+**Move 7, second half — ClearerVoice steered by Move 2's voice
+(Inferred).** MossFormer2_SS_16K (55 735 410 parameters, the published size)
+separates each 2 s window into two voices; consecutive windows are put in
+one order by their overlaps; in every window where Move 2 pulled the target
+voice, the stream whose spectrum follows it is the target. The speaker's own
+voice, made by HARK from this file, is the profile that steers it — not an
+ECAPA embedding. **Not verified against the real weights here** (Hugging
+Face is not reachable from this build machine): every HARK run that uses it
+first mixes two clean phrases and separates them, and keeps nothing unless
+they come apart by at least 3 dB. On a CPU it needs about 7 s per second of
+audio, so Quick leaves it out. Its weights were trained on two-speaker
+mixtures built partly from LDC-licensed corpora (WSJ0-2mix); the weights
+themselves are published under Apache-2.0.
+
+**Move 4 — the generative lane (Invented), with M2 and M6.** Our own score
+model (EDM, a small U-Net on SGMSE's compressed complex spectrogram; tiny
+0.46 M, small 2.7 M, base 10.8 M parameters) trained on LibriSpeech's
+training sets (CC BY 4.0). Sampling: the file's noise modelled by NMF
+(Itakura–Saito, rank 8) learnt on the voice-free stretches and refitted by
+EM on what each guess leaves; every reverse step denoises with the prior,
+then a closed-form data step per bin in the linear spectrum pulls the guess
+to what the recording allows (DiffPIR-style). Many samples: the mean is the
+result, the spread per cell the uncertainty map (`uncertainty.png`); cells
+whose residual is far above the noise model are flagged. M2 runs two priors
+and maps where they disagree; M6 tunes the prior for 200 steps on this
+speaker's DETECTED speech (Move 2's LIFT) before guessing. Move 4 is scored
+on the probe like every restoration, so a prior's progress shows per file.
+*Measured so far: only that the machinery runs* — a tiny prior trained for
+150 steps on 45 s of speech made no difference to a noisy reading, as
+expected. Whether the lane helps is the first thing to measure once
+`train_prior.bat` has run.
+
+**Steady tones (Cleaned).** The analysis's tonal lines, each refined on the
+whole file (±2 Hz) and followed by complex demodulation over 1 s (a tracking
+notch about 2 Hz wide), subtracted. *Measured:* two tones (one drifting)
+24.5 dB down; a voice harmonic crossing a tone loses 13.7 dB of what is at
+that frequency (any notch does); noise 34 dB down.
+
+**The provenance map.** The hunt's map with five lanes beneath it, time
+aligned, coloured as ATK colours tiers: MEASURED (voices found, consonants,
+pulsing sources), CLEANED (Move 2's voice, machines and tones taken out),
+INFERRED (Move 3, ClearerVoice), INVENTED (Move 4), AUDIT (what was
+flagged).
+
+**Hunter detection floors, re-measured after the whistle fix** (30 s, three
+2.5 s voice-like probes at 130/180/220 Hz, Quick-like null of at least
+15 min): white noise −5 and −10 dB 3 of 3 DETECTED, −15 dB none (1
+possible); pink −5 dB 3 of 3, −10 dB 1 of 3, −15 dB none; randomly swinging
+level −5 dB 3 of 3, −10 dB 1 of 3; hum −5 dB 3 of 3, −10 dB 2 of 3, −15 dB 1
+of 3. No detection away from a probe in any of them.
+
+### New on 2026-11-11 (day)
 
 **Move 3 — the file trains its own denoiser (Inferred).** GTCRN's
 published weights (trained on DNS3) are fine-tuned on this recording alone,
@@ -202,13 +287,19 @@ test environment; on your machine they are scored too.
   (RemixIT), not on noisy-target pairs: noisy targets were measured to make
   it worse (it learnt to keep the noise). M4 (from nothing) uses LIFT as its
   teacher.
-- Move 7 is the pitch-range half. Steering a target-speaker extractor with
-  a self-made ECAPA profile waits for ClearerVoice, which is not built.
+- Move 7's second half steers ClearerVoice's two-speaker separator with
+  Move 2's own voice (spectral agreement per window), not with an ECAPA
+  embedding and not with an audio-only target-speaker model: the one
+  ClearerVoice publishes (SpEx+) is 8 kHz and trained on clean mixtures.
+- M3, M5 and the steady-tone notch run on every budget, not behind a
+  research toggle: all three are Measured or Cleaned and cheap. Move 4 (and
+  M2, M6) runs on Thorough and longer, only where a prior is installed.
 - Move 8's DEMON uses band envelopes and their modulation spectra, not
   Antoni's fast spectral correlation; its machines come from the pitch
   hunter, not a separate cyclic-notch search.
-- The map is the whitened spectrogram to 2 kHz with each track drawn on it,
-  not yet the provenance-coloured map.
+- The map is the whitened spectrogram to 2 kHz with each track drawn on it;
+  the provenance map adds a lane per tier beneath it rather than colouring
+  the spectrogram itself.
 
 **Not yet measured:** any of it on your own recordings or your own noise;
 the SpeechBrain models and DeepFilterNet on the probe (they need your
@@ -230,12 +321,9 @@ of it.
 **Defaults taken until you decide:** the name HARK; this file of its own,
 with a pointer in FORENSICS_PLAN.md §15; the kill-criteria bars as proposed.
 
-**Next:** Move 4, the generative lane — a speech prior trained on
-LibriSpeech's training sets (CC BY 4.0) on your GPU, posterior sampling
-with a noise model fitted to the file, many samples and an uncertainty map
-(Invented). Then Move 7's second half (ClearerVoice steered by the
-speaker's own profile), and the cheap mad moves (M3, consonants beside the
-vowels; M5, stacking a voice across a case).
+**Next:** run `get_speechbrain.bat` (GTCRN's and ClearerVoice's weights),
+then `train_prior.bat` (days on your GPU), then HARK on real files — the
+first measurements that matter. M1 waits for a local text-to-speech.
 
 **Run it:** on the Restore Audio page, analyse and run options, then pick a
 budget and press Run HARK. From the command line, in the ATK folder:
@@ -247,7 +335,8 @@ python -m forensics_workshop hark CASE RUN_ID --examiner NAME ^
   --phrases models\speechbrain\reference\LibriSpeech\test-clean ^
   --models-root models\speechbrain --deepfilter bin\deepfilter\deep-filter.exe ^
   --rnnoise-model models\rnnoise\sh.rnnn ^
-  --gtcrn-weights models\gtcrn\model_trained_on_dns3.tar
+  --gtcrn-weights models\gtcrn\model_trained_on_dns3.tar ^
+  --clearervoice-weights models\clearervoice\MossFormer2_SS_16K\last_best_checkpoint.pt
 python -m forensics_workshop hark-list CASE RUN_ID --examiner NAME --id HARK_ID
 ```
 

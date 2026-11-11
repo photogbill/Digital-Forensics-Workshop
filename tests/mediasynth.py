@@ -543,6 +543,14 @@ def copy_wav(src, dst):
     os.replace(dst + ".part", dst)
 if op == "hunt" and req.get("png"):
     open(req["png"], "wb").write(PNG)
+if op == "provenance":
+    open(req["png"], "wb").write(PNG)
+    out = {"map": {"width": 1, "height": 90, "spectrogram_height": 10,
+                   "top_hz": 2000.0, "lane_top": 14, "lane_h": 14,
+                   "lane_gap": 2, "lanes": ["measured", "cleaned", "inferred",
+                                            "invented", "audit"]},
+           "drawn": {k: len(v) for k, v in (req.get("lanes") or {}).items()},
+           "lanes_given": req.get("lanes")}
 prm = req.get("params") or {}
 if op == "hunt" and prm.get("f0_min_hz") is not None:
     # Move 7's narrowed hunt: the planted one, its grid the range asked
@@ -576,6 +584,13 @@ if op == "census":
                        for m in req.get("machines") or []] \
         if req.get("outputs") else []
     out["machines_given"] = len(req.get("machines") or [])
+    for key in ("without", "tones"):
+        if (req.get("tone_outputs") or {}).get(key):
+            copy_wav(req["wav"], req["tone_outputs"][key])
+    if req.get("tone_outputs"):
+        out["tones"] = [{"hz": l["hz"], "refined_hz": l["hz"], "rms": 0.01}
+                        for l in req.get("lines") or []]
+        out["tone_smooth_s"] = 1.0
     out.setdefault("versions", {"torch": "fake", "device": "cpu"})
 if op == "probe":
     for key in ("probe", "clean"):
@@ -680,6 +695,137 @@ def fake_gtcrn_weights(folder) -> Path:
     return path
 
 
+FAKE_CV_WORKER = r'''
+import json, os, sys
+HERE = os.path.dirname(os.path.abspath(__file__))
+req = json.load(open(sys.argv[1], encoding="utf-8"))
+op = req["op"]
+print("fake clearervoice worker: " + op, flush=True)
+open(os.path.join(HERE, "fake_cv_calls.txt"), "a",
+     encoding="utf-8").write(op + "\n")
+cfg = {}
+if os.path.exists(os.path.join(HERE, "fake_cv.json")):
+    cfg = json.load(open(os.path.join(HERE, "fake_cv.json"), encoding="utf-8"))
+if op in cfg.get("fail", []):
+    print("planted failure in " + op, flush=True)
+    sys.exit(3)
+def copy_wav(src, dst):
+    data = open(src, "rb").read()
+    open(dst + ".part", "wb").write(data)
+    os.replace(dst + ".part", dst)
+out = {"versions": {"torch": "fake", "device": "cpu"}}
+if op == "selfcheck":
+    out.update({"parameters": 55735410, "mixture_si_snr_db": 0.0,
+                "separated_si_snr_db": cfg.get("improvement", 14.0),
+                "improvement_db": cfg.get("improvement", 14.0), "flips": 0})
+elif op == "tse":
+    for key in ("target", "other"):
+        copy_wav(req["wav"], req["outputs"][key])
+    out.update({"windows": [{"start_s": 0.0, "stream": 0,
+                             "evidence": [0.9, 0.4]},
+                            {"start_s": 1.5, "stream": 0, "evidence": None}],
+                "steered": 1, "flips": 0, "parameters": 55735410,
+                "voice_given": req.get("voice")})
+tmp = sys.argv[2] + ".part"
+json.dump(dict(out, op=op), open(tmp, "w", encoding="utf-8"))
+os.replace(tmp, sys.argv[2])
+'''
+
+
+def install_cv_worker(folder, improvement=14.0, fail=()) -> list:
+    root = Path(folder)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "fake_cv_worker.py").write_text(FAKE_CV_WORKER, encoding="utf-8")
+    calls = root / "fake_cv_calls.txt"
+    if calls.exists():
+        calls.unlink()
+    import json as _json
+    (root / "fake_cv.json").write_text(_json.dumps(
+        {"improvement": improvement, "fail": list(fail)}), encoding="utf-8")
+    return [sys.executable, str(root / "fake_cv_worker.py")]
+
+
+def cv_calls(folder) -> list:
+    f = Path(folder) / "fake_cv_calls.txt"
+    return f.read_text("utf-8").split() if f.exists() else []
+
+
+def fake_cv_weights(folder) -> Path:
+    root = Path(folder)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "last_best_checkpoint.pt"
+    path.write_bytes(b"MossFormer2_SS_16K weights (test stand-in)\n")
+    return path
+
+
+FAKE_PRIOR_WORKER = r'''
+import json, os, sys
+HERE = os.path.dirname(os.path.abspath(__file__))
+req = json.load(open(sys.argv[1], encoding="utf-8"))
+op = req["op"]
+print("fake prior worker: " + op, flush=True)
+open(os.path.join(HERE, "fake_prior_calls.txt"), "a",
+     encoding="utf-8").write(op + "\n")
+PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02"
+       b"\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01"
+       b"\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xaeB`\x82")
+def copy_wav(src, dst):
+    data = open(src, "rb").read()
+    open(dst + ".part", "wb").write(data)
+    os.replace(dst + ".part", dst)
+out = {"versions": {"torch": "fake", "device": "cpu"}}
+if op == "sample":
+    outs = req["outputs"]
+    for key, path in outs.items():
+        if key == "png":
+            open(path, "wb").write(PNG)
+        else:
+            copy_wav(req["wav"], path)
+    pri = []
+    for k, pr in enumerate(req["priors"]):
+        pri.append({"prior": pr["name"], "config": "small", "step": 1000,
+                    "samples": req["samples"], "steps": req["steps"],
+                    "em_rounds": req["em_rounds"], "spread_db_speech": 3.4,
+                    "speech_cells": 0.2, "flagged_cells": 0.012,
+                    "uncertain_s": 0.4, "png": None})
+    out.update({"priors": pri, "frames": 100, "free_given": req.get("free")})
+    if len(pri) >= 2:
+        out["prior_swap"] = {"priors": [p["prior"] for p in pri[:2]],
+                             "differ_db_speech": 2.1, "depends_cells": 0.03}
+elif op == "finetune":
+    open(req["out"], "wb").write(b"speaker prior (test stand-in)")
+    out.update({"steps": 200, "speech_s": 3.0, "loss_first": 0.3,
+                "loss_last": 0.2})
+tmp = sys.argv[2] + ".part"
+json.dump(dict(out, op=op), open(tmp, "w", encoding="utf-8"))
+os.replace(tmp, sys.argv[2])
+'''
+
+
+def install_prior_worker(folder) -> list:
+    root = Path(folder)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "fake_prior_worker.py").write_text(FAKE_PRIOR_WORKER,
+                                               encoding="utf-8")
+    calls = root / "fake_prior_calls.txt"
+    if calls.exists():
+        calls.unlink()
+    return [sys.executable, str(root / "fake_prior_worker.py")]
+
+
+def prior_calls(folder) -> list:
+    f = Path(folder) / "fake_prior_calls.txt"
+    return f.read_text("utf-8").split() if f.exists() else []
+
+
+def fake_prior(folder, name="librispeech") -> Path:
+    root = Path(folder) / name
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "prior.pt"
+    path.write_bytes(b"speech prior (test stand-in)\n")
+    return path
+
+
 HARK_SEG = {"track": 1, "start_s": 1.2, "end_s": 2.6, "frames": 140,
             "voiced_frames": 120, "parts": 2, "f0_median_hz": 132.0,
             "f0_min_hz": 118.0, "f0_max_hz": 151.0, "f0_hz": [132.0] * 140,
@@ -715,6 +861,13 @@ HARK_PLAN = {
                 "runs": [{"track": 1, "start_s": 1.2, "end_s": 2.5,
                           "f0_median_hz": 131.0, "refined_pct": 0.8}],
                 "versions": {"torch": "fake", "device": "cpu"}},
+    "consonants": {"margins": [
+        {"voice": 0, "side": "before", "start_s": 1.05, "end_s": 1.17,
+         "score_db": 6.0, "p": 0.0005, "status": "likely"},
+        {"voice": 0, "side": "after", "start_s": 2.63, "end_s": 2.75,
+         "score_db": 1.0, "p": 0.3, "status": "none"}],
+        "band_hz": [2000, 8000], "voices": 1, "null_margins": 4000,
+        "q": 0.1, "found": 1, "expected_false": 0.1},
     "census": {"modulated": {"items": [
         {"kind": "pulsing", "rate_hz": 7.5, "start_s": 0.0, "end_s": 3.0,
          "windows": 1, "score": 9.0, "fa_per_hour": 0.001,

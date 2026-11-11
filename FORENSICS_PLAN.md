@@ -2351,8 +2351,20 @@ counted as noise by Move 3, and cancelled along their pitch as a Cleaned
 restoration result), and the analysis's steady tones. A hunter fix: a
 drifting whistle no longer passes as a voice.
 
-**Not built:** posterior sampling (Move 4 — it needs a speech prior trained
-on your GPU), the speaker loop's second half (ClearerVoice steered by the
-speaker's own profile), the mad moves other than M4, the full FRESH filter's
-cross-harmonic coherence. Nothing is measured on real recordings of yours
+**Built 2026-11-11 (night) — everything but M1:** Move 4, the generative
+lane (`media/prior_worker.py`, our own score model; posterior sampling under
+the file's own NMF noise model; many samples and an uncertainty map; tier
+Invented), with M2 (two priors swapped) and M6 (a prior tuned to the
+speaker), trained by ATK's `train_prior.bat` on LibriSpeech on your GPU;
+Move 7's second half (`media/clearervoice_worker.py`, ClearerVoice's
+MossFormer2_SS_16K ported to torch and steered by Move 2's voice, with a
+self-check on every run); M3 (consonants beside the vowels); M5
+(`media/hark_stack.py`, one voice stacked across a case); steady tones
+followed and taken out; the provenance map. Measured results in
+HARK_PLAN.md.
+
+**Not built:** M1 (it needs a local text-to-speech), the full FRESH
+filter's cross-harmonic coherence. **Waiting:** the speech prior must be
+trained (days); ClearerVoice's port has not met its real weights (it proves
+itself on your machine). Nothing is measured on real recordings of yours
 yet.

@@ -29,6 +29,7 @@ import mediasynth as M
 from forensics_workshop.case import Case
 from forensics_workshop.errors import MediaError
 from forensics_workshop.media import hark as H
+from forensics_workshop.media import hark_stack as HS
 from forensics_workshop.media import recipe as R
 from forensics_workshop.media import restore as RS
 
@@ -57,6 +58,12 @@ class _Fixture(TempDirCase):
         self.sbin = self.tmp / "sbin"
         self.sworker = M.install_selftrain_worker(self.sbin)
         self.gtcrn = M.fake_gtcrn_weights(self.tmp / "gtcrn")
+        self.cvbin = self.tmp / "cvbin"
+        self.cvworker = M.install_cv_worker(self.cvbin)
+        self.cvweights = M.fake_cv_weights(self.tmp / "cv")
+        self.pbin = self.tmp / "pbin"
+        self.pworker = M.install_prior_worker(self.pbin)
+        self.priors = [M.fake_prior(self.tmp / "priors")]
         self.scratch = self.tmp / "atk-data" / "tmp" / "speechbrain"
         self.evidence = self.tmp / "evidence"
         self.clip = M.write_wav(self.evidence / "radio.wav",
@@ -80,6 +87,10 @@ class _Fixture(TempDirCase):
         kw.setdefault("rnnoise_model", self.rnnoise)
         kw.setdefault("gtcrn_weights", self.gtcrn)
         kw.setdefault("selftrain_worker", self.sworker)
+        kw.setdefault("clearervoice_weights", self.cvweights)
+        kw.setdefault("cv_worker", self.cvworker)
+        kw.setdefault("priors", self.priors)
+        kw.setdefault("prior_worker", self.pworker)
         return H.run(self.case, self.run_id, **kw)
 
     def long_noise(self):
@@ -128,7 +139,9 @@ class Engine(_Fixture):
         # calibrations on the same test voices) found nothing more here
         self.assertEqual(calls(self.bin), ["hunt", "calibrate", "hunt",
                                            "calibrate", "calibrate",
-                                           "extract", "census", "audit"])
+                                           "extract", "consonants",
+                                           "census", "audit",
+                                           "provenance"])
         self.assertEqual({t["id"] for t in res["audit"]["targets"]},
                          {"hark:voice", "hark:lift"})
         self.assertEqual(self.actions(), ["media.hark.started",
@@ -207,8 +220,10 @@ class Engine(_Fixture):
         res = self.hark(phrases=self.phrases())
         self.assertEqual(calls(self.bin), ["hunt", "calibrate", "hunt",
                                            "calibrate", "calibrate",
-                                           "extract", "census", "probe",
-                                           "extract", "score", "audit"])
+                                           "extract", "consonants",
+                                           "census", "probe",
+                                           "extract", "score", "audit",
+                                           "provenance"])
         folder = Path(res["folder"])
         probe = folder / H.PROBE_DIR
         for name in ("probe.wav", "clean.wav", "recipe.json",
@@ -248,10 +263,12 @@ class Engine(_Fixture):
         st = res["stages"]["score"]
         want = {o["id"] for o in self.report["options"]
                 if not RS.is_faint_option(o["id"]) and not o.get("shift")}
-        self.assertEqual(set(st["candidates"]) - {H.RESULT_OPTION}, want)
+        # HARK's own: Move 2, and on Thorough the generative lane (Move 4)
+        own = {H.RESULT_OPTION, H.PRIOR_OPTION}
+        self.assertEqual(set(st["candidates"]) - own, want)
         self.assertEqual(st["failed"], {})
         self.assertEqual({r["id"] for r in res["choice"]["rows"]},
-                         want | {H.RESULT_OPTION})
+                         want | own)
 
     def test_a_chain_that_cannot_run_here_is_named_not_scored(self):
         res = self.hark(phrases=self.phrases(), budget_name="thorough",
@@ -423,6 +440,27 @@ class Engine(_Fixture):
         self.assertEqual(H.split_noise([[0.0, 10.0]]),
                          ([[0.0, 5.0]], [[5.0, 10.0]]))
         self.assertEqual(H.split_noise([]), ([], []))
+
+    def test_consonants_are_hunted_beside_the_voice(self):
+        res = self.hark()
+        text = " ".join(res["verdict"])
+        self.assertIn("Consonants (M3): of 2 margins beside the voice "
+                      "(30–150 ms before and after each DETECTED stretch, "
+                      "2–8 kHz), 1 hold a burst", text)
+        self.assertIn("never audio", text)
+        self.assertEqual(res["stages"]["consonants"]["found"], 1)
+        req = json.loads((Path(res["folder"]) / "consonants.request.json")
+                         .read_text("utf-8"))
+        self.assertEqual(len(req["hunt"]["segments"]), 1)
+        self.assertEqual(res["consonants"]["margins"][0]["status"], "likely")
+        # its failure costs M3 alone
+        plan = json.loads(json.dumps(PLAN))
+        plan["fail"] = ["consonants"]
+        install_hark_worker(self.bin, plan)
+        res = self.hark()
+        self.assertTrue(res["stages"]["consonants"]["skipped"])
+        self.assertIn("could not run", res["stages"]["consonants"]["note"])
+        self.assertIn("census", res["stages"])
 
     def loop_plan(self, narrow_pd50=-12.0):
         """A 20 s recording: the hunt DETECTED 1.4 s of a voice at 132 Hz;
@@ -604,6 +642,162 @@ class Engine(_Fixture):
         self.assertTrue(tg[f"{H.MACHINE_OPTION}:without"]["had_residual"])
         self.assertIn(f"{H.MACHINE_OPTION}:machine", tg)
 
+    def test_clearervoice_is_steered_to_the_voice_move_2_pulled(self):
+        # Quick leaves it out
+        res = self.hark()
+        self.assertTrue(res["stages"]["tse"]["skipped"])
+        self.assertIn("Quick leaves it out", res["stages"]["tse"]["note"])
+        self.assertEqual(M.cv_calls(self.cvbin), [])
+        # Thorough runs it — after proving itself on two clean phrases
+        res = self.hark(budget_name="thorough", phrases=self.phrases())
+        self.assertEqual(M.cv_calls(self.cvbin), ["selfcheck", "tse"])
+        st = res["stages"]["tse"]
+        self.assertEqual(st["option"], H.CV_OPTION)
+        self.assertEqual(st["selfcheck"]["improvement_db"], 14.0)
+        folder = Path(res["folder"])
+        req = json.loads((folder / "tse.request.json").read_text("utf-8"))
+        self.assertTrue(req["voice"].endswith(".wav"))
+        self.assertEqual(req["weights"], os.fspath(self.cvweights))
+        report = RS.load_run(self.case, self.run_id)
+        r = [x for x in report["results"] if x["option"] == H.CV_OPTION][0]
+        self.assertEqual(r["tier"], "inferred")
+        self.assertEqual([o["stem"] for o in r["outputs"]],
+                         ["target", "other"])
+        recipe = R.load_recipe(Path(report["folder"]))
+        step = [x for x in recipe["steps"] if x["tool"] == H.CV_TOOL][-1]
+        self.assertEqual(step["tier"], "inferred")
+        self.assertEqual(step["model"]["sha256"], H.CV_SHA256)
+        self.assertEqual(R.tool_floor(H.CV_TOOL), "inferred")
+        self.assertIn("separated two clean phrases by +14.0 dB",
+                      " ".join(res["verdict"]))
+
+    def test_clearervoice_that_fails_its_selfcheck_keeps_nothing(self):
+        self.cvworker = M.install_cv_worker(self.cvbin, improvement=1.0)
+        res = self.hark(budget_name="thorough", phrases=self.phrases())
+        st = res["stages"]["tse"]
+        self.assertTrue(st["skipped"])
+        self.assertIn("the port and the weights disagree", st["note"])
+        self.assertEqual(M.cv_calls(self.cvbin), ["selfcheck"])
+        report = RS.load_run(self.case, self.run_id)
+        self.assertEqual([x for x in report["results"]
+                          if x["option"] == H.CV_OPTION], [])
+        # no weights: says why
+        res = self.hark(budget_name="thorough", clearervoice_weights=None)
+        self.assertIn("not installed", res["stages"]["tse"]["note"])
+
+    def test_the_generative_lane_guesses_with_an_uncertainty_map(self):
+        res = self.hark()
+        self.assertIn("Quick leaves it out", res["stages"]["generate"]["note"])
+        res = self.hark(budget_name="thorough")
+        self.assertEqual(M.prior_calls(self.pbin), ["sample"])
+        st = res["stages"]["generate"]
+        self.assertEqual(st["option"], H.PRIOR_OPTION)
+        folder = Path(res["folder"])
+        self.assertTrue((folder / H.UNCERTAINTY_FILE).is_file())
+        req = json.loads((folder / "generate.request.json")
+                         .read_text("utf-8"))
+        self.assertEqual((req["samples"], req["steps"]), (4, 30))
+        self.assertEqual(len(req["priors"]), 1)
+        # the noise model starts from the file's own voice-free stretches
+        self.assertEqual(req["free"], H.noise_stretches(
+            json.loads((folder / "hunt.response.json").read_text("utf-8"))))
+        report = RS.load_run(self.case, self.run_id)
+        r = [x for x in report["results"] if x["option"] == H.PRIOR_OPTION][0]
+        self.assertEqual(r["tier"], "invented")
+        self.assertTrue(all(o["file"].endswith(".invented.wav")
+                            for o in r["outputs"]), r["outputs"])
+        recipe = R.load_recipe(Path(report["folder"]))
+        step = [x for x in recipe["steps"] if x["tool"] == H.PRIOR_TOOL][-1]
+        self.assertEqual(step["tier"], "invented")
+        self.assertEqual(R.tool_floor(H.PRIOR_TOOL), "invented")
+        text = " ".join(res["verdict"])
+        self.assertIn("Generative lane (Move 4): 4 guesses", text)
+        self.assertIn("INVENTED", text)
+        self.assertNotIn("Move 4", text.split("Not yet")[-1])
+        lanes = json.loads((folder / "provenance.request.json")
+                           .read_text("utf-8"))["lanes"]
+        self.assertEqual(lanes["invented"], [[0.0, 3.0, 1.0]])
+
+    def test_the_long_budgets_swap_priors_and_tune_to_the_speaker(self):
+        self.priors.append(M.fake_prior(self.tmp / "priors", "multilingual"))
+        plan = self.long_noise()
+        seg = dict(SEG, start_s=2.0, end_s=5.0, frames=300,
+                   f0_hz=[132.0] * 300)
+        plan["hunt"]["segments"] = [seg]
+        install_hark_worker(self.bin, plan)
+        res = self.hark(budget_name="day")
+        self.assertEqual(M.prior_calls(self.pbin), ["finetune", "sample"])
+        req = json.loads((Path(res["folder"]) / "generate.request.json")
+                         .read_text("utf-8"))
+        self.assertEqual([p["name"] for p in req["priors"]],
+                         ["librispeech", "1"])
+        self.assertTrue(req["priors"][1]["path"].endswith(
+            "speaker_prior.pt"))
+        text = " ".join(res["verdict"])
+        self.assertIn("Prior swap (M2)", text)
+        self.assertIn("M6: the prior was tuned for 200 steps", text)
+        # measured like the rest on the probe when there are phrases
+        res = self.hark(budget_name="thorough", phrases=self.phrases())
+        self.assertIn(H.PRIOR_OPTION, res["stages"]["score"]["candidates"])
+        self.assertIn("sample", M.prior_calls(self.pbin))
+        # no prior trained: says how to get one
+        res = self.hark(budget_name="thorough", priors=[])
+        self.assertIn("train_prior.bat", res["stages"]["generate"]["note"])
+
+    def test_the_provenance_map_has_a_lane_per_tier(self):
+        self.run_all()
+        res = self.hark()
+        folder = Path(res["folder"])
+        self.assertTrue((folder / H.PROVENANCE_FILE).is_file())
+        self.assertEqual(res["provenance_path"],
+                         os.fspath(folder / H.PROVENANCE_FILE))
+        req = json.loads((folder / "provenance.request.json")
+                         .read_text("utf-8"))
+        lanes = req["lanes"]
+        self.assertEqual(sorted(lanes), sorted(["measured", "cleaned",
+                                                "inferred", "invented",
+                                                "audit"]))
+        # the DETECTED voice and the likely consonant, measured; the
+        # census's pulsing source too; Move 2's voice, cleaned
+        self.assertIn([1.2, 2.6, 1.0], lanes["measured"])
+        self.assertIn([1.05, 1.17, 1.0], lanes["measured"])
+        self.assertIn([1.2, 2.6, 1.0], lanes["cleaned"])
+        self.assertEqual(lanes["invented"], [])
+        recipe = R.load_recipe(Path(self.report["folder"]))
+        step = [x for x in recipe["steps"] if x["tool"] == H.HUNT_TOOL][-1]
+        self.assertIn(f"hark/{res['hark_id']}/{H.PROVENANCE_FILE}",
+                      step["outputs"])
+
+    def test_steady_tones_are_followed_and_taken_out(self):
+        from unittest import mock
+        lines = [{"hz": 1200.0, "prominence_db": 12.4, "z": 30.0,
+                  "series": ""},
+                 {"hz": 437.0, "prominence_db": 8.0, "z": 20.0,
+                  "series": ""}]
+        with mock.patch.object(H._restore, "tonal_lines",
+                               return_value=lines):
+            res = self.hark()
+        folder = Path(res["folder"])
+        req = json.loads((folder / "census.request.json").read_text("utf-8"))
+        self.assertEqual([l["hz"] for l in req["lines"]], [1200.0, 437.0])
+        self.assertEqual(sorted(req["tone_outputs"]), ["tones", "without"])
+        report = RS.load_run(self.case, self.run_id)
+        tones = [r for r in report["results"]
+                 if r["option"] == H.TONE_OPTION]
+        self.assertEqual(len(tones), 1)
+        self.assertEqual(tones[0]["tier"], "cleaned")
+        self.assertEqual([o["stem"] for o in tones[0]["outputs"]],
+                         ["without", "tones"])
+        recipe = R.load_recipe(Path(report["folder"]))
+        st = [x for x in recipe["steps"] if x["tool"] == H.TONE_TOOL]
+        self.assertEqual(st[0]["tier"], "cleaned")
+        self.assertEqual(len(st[0]["params"]["tones"]), 2)
+        self.assertEqual(R.tool_floor(H.TONE_TOOL), "cleaned")
+        self.assertIn("all 2 followed and taken out in the restoration "
+                      "results", " ".join(res["verdict"]))
+        tg = {t["id"] for t in res["audit"]["targets"]}
+        self.assertIn(f"{H.TONE_OPTION}:without", tg)
+
     def test_a_machine_alone_is_not_pulled_out_as_a_voice(self):
         self.machine_plan(voice=False)
         res = self.hark()
@@ -703,7 +897,9 @@ class Engine(_Fixture):
         # calibrations on the same test voices) found nothing more here
         self.assertEqual(calls(self.bin), ["hunt", "calibrate", "hunt",
                                            "calibrate", "calibrate",
-                                           "extract", "census", "audit"])
+                                           "extract", "consonants",
+                                           "census", "audit",
+                                           "provenance"])
         self.assertEqual(sorted(again["stages"]), sorted(H.STAGES))
         listed = H.list_harks(self.case, self.run_id)
         self.assertEqual([r["hark_id"] for r in listed], [first["hark_id"]])
@@ -803,6 +999,73 @@ def _wav(path, x, rate):
 
 @unittest.skipUnless(HAS_TORCH, "torch is not installed here (the worker's "
                                 "interpreter in ATK has it)")
+class Stack(_Fixture):
+    """M5 across a case, through the fake hark and voice workers: the fake
+    voice model's embedding is the segment's pitch (zero crossings)."""
+
+    def recording(self, name, hz, seg_status, start, end):
+        clip = M.write_wav(self.evidence / f"{name}.wav",
+                           M.tone(2.6, hz, 0.3, rate=16000, start=0.3,
+                                  total=3.0), rate=16000)
+        report = RS.analyse(self.case, clip, ffmpeg=self.ffmpeg,
+                            worker=self.rworker, scratch=self.scratch,
+                            faint=False)
+        n = int(round((end - start) / 0.01))
+        seg = dict(SEG, start_s=start, end_s=end, status=seg_status,
+                   frames=n, voiced_frames=n, f0_median_hz=float(hz),
+                   f0_min_hz=float(hz), f0_max_hz=float(hz),
+                   f0_hz=[float(hz)] * n)
+        plan = json.loads(json.dumps(PLAN))
+        plan["hunt"]["segments"] = [seg]
+        install_hark_worker(self.bin, plan)
+        H.run(self.case, report["run_id"], worker=self.hworker,
+              scratch=self.scratch, restore_worker=self.rworker,
+              ffmpeg=self.ffmpeg, selftrain_worker=self.sworker)
+        return report["run_id"]
+
+    def test_one_voice_is_stacked_across_the_case(self):
+        a = self.recording("a", 400, "detected", 0.4, 2.8)
+        b = self.recording("b", 400, "detected", 0.4, 2.8)
+        c = self.recording("c", 400, "possible", 0.6, 1.4)
+        d = self.recording("d", 1200, "detected", 0.4, 2.8)
+        vbin = self.tmp / "vbin"
+        vworker = M.install_vp_worker(vbin)
+        model = M.fake_voice_model(self.tmp / "voice")
+        lines = []
+        res = HS.stack(self.case, model_dir=model, ffmpeg=self.ffmpeg,
+                       worker=vworker, scratch=self.scratch,
+                       progress=lines.append)
+        # the fixture's own run has no finished HARK: four recordings
+        self.assertEqual(len(res["recordings"]), 4)
+        self.assertTrue(res["folder"].startswith(str(self.case.root)))
+        self.assertTrue((Path(res["folder"]) / HS.STACK_FILE).is_file())
+        voices = {v["name"]: v for v in res["voices"]}
+        self.assertEqual(sorted(voices), ["Voice A", "Voice B"])
+        va = voices["Voice A"]
+        self.assertEqual({m["run_id"]: m["status"] for m in va["members"]},
+                         {a: "strong", b: "strong", c: "faint"})
+        self.assertAlmostEqual(va["pitch_hz"], 400.0)
+        self.assertEqual(va["stacked"]["recordings"], 1)
+        self.assertEqual([m["run_id"] for m in voices["Voice B"]["members"]],
+                         [d])
+        self.assertIn("Voice A (pitch about 400 Hz): DETECTED in 2 "
+                      "recording(s), faintly in 1 more — of 4 recordings",
+                      " ".join(lines))
+        self.assertIn("media.hark.stacked", self.actions())
+        rows = HS.member_rows(res)
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(HS.list_stacks(self.case)[0]["id"], res["id"])
+
+    def test_one_recording_is_not_a_stack(self):
+        self.recording("a", 400, "detected", 0.4, 2.8)
+        with self.assertRaises(MediaError) as cm:
+            HS.stack(self.case, model_dir=M.fake_voice_model(self.tmp / "v"),
+                     ffmpeg=self.ffmpeg,
+                     worker=M.install_vp_worker(self.tmp / "vbin"),
+                     scratch=self.scratch)
+        self.assertIn("HARK has finished on 1 recording", str(cm.exception))
+
+
 class Science(TempDirCase):
     RATE = 16000
     QUICK = {"surrogates": 3, "slopes": [0.0, 0.25, -0.25], "tracks": 1,
@@ -981,6 +1244,103 @@ class Science(TempDirCase):
         self.assertLess(abs(db(without[a:b]) - db(noise[a:b])), 1.0)
         # before it starts, nothing is taken
         self.assertEqual(float(machine[:3 * self.RATE].abs().max()), 0.0)
+
+    def test_consonants_are_found_beside_the_vowels_and_not_in_noise(self):
+        """M3: 60 ms fricative bursts (3-7 kHz, level with the noise in that
+        band) 120 ms before every other voiced stretch are found; the empty
+        margins are not called likely. Measured 2026-11-11 on 60 s of pink
+        noise: bursts at 0 dB 11 of 11, at -3 dB 7 of 11, at -6 dB none;
+        empty margins 0 of 33 likely, 2 possible (p <= 0.05, as chance
+        allows)."""
+        torch, W = self.torch, self.W
+        n = 30 * self.RATE
+        x = self.noise(n, 3)
+        X = torch.fft.rfft(x)
+        f = torch.fft.rfftfreq(n, 1 / self.RATE)
+        band = float((X.abs() ** 2)[(f >= 3000) & (f <= 7000)].sum()) \
+            / n / n * 2
+        g = torch.Generator().manual_seed(9)
+        segs, truth, t, i = [], [], 2.0, 0
+        while t < 27.0:
+            pr, _f, _on = W.voiced_probe(self.RATE, 0.5, 140.0, i)
+            k = int(t * self.RATE)
+            x[k:k + pr.numel()] += pr * 0.05
+            segs.append({"track": 1, "status": "detected", "start_s": t,
+                         "end_s": t + 0.5,
+                         "f0_hz": [140.0 + j % 30 for j in range(50)]})
+            truth.append(i % 2 == 0)
+            if truth[-1]:
+                L = int(0.06 * self.RATE)
+                w = torch.randn(L, generator=g)
+                Wf = torch.fft.rfft(w)
+                ff = torch.fft.rfftfreq(L, 1 / self.RATE)
+                Wf[(ff < 3000) | (ff > 7000)] = 0
+                b = torch.fft.irfft(Wf, n=L)
+                b = b / b.std() * torch.hann_window(L) * math.sqrt(band)
+                kb = int((t - 0.12) * self.RATE)
+                x[kb:kb + L] += b
+            t, i = t + 2.6, i + 1
+        free, prev = [], 0.0
+        for sg in segs:
+            if sg["start_s"] - 0.3 - prev > 1.0:
+                free.append([prev, sg["start_s"] - 0.3])
+            prev = sg["end_s"] + 0.3
+        free.append([prev, 30.0])
+        path = self.tmp / "m3.wav"
+        _wav(path, x, self.RATE)
+        res = W.consonants_op({"wav": os.fspath(path), "hunt": {
+            "segments": segs, "free": free, "grid": {"top_hz": 8000}}})
+        planted = [m for m in res["margins"]
+                   if m["side"] == "before" and truth[m["voice"]]]
+        empty = [m for m in res["margins"] if m not in planted]
+        self.assertGreaterEqual(
+            sum(m["status"] == "likely" for m in planted),
+            len(planted) - 1, planted)
+        self.assertEqual([m for m in empty if m["status"] == "likely"], [])
+        self.assertEqual(res["band_hz"][0], 2000)
+
+    def test_steady_tones_are_cancelled_and_little_else(self):
+        """Two steady tones (one drifting 0.13 Hz) under white noise: 24.5
+        dB down measured; from a voice crossing a tone with no tone there,
+        13.7 dB below the voice; from noise 34 dB below it."""
+        torch, W = self.torch, self.W
+        n = 20 * self.RATE
+        t = torch.arange(n) / self.RATE
+        noise = torch.randn(n, generator=torch.Generator().manual_seed(1)) \
+            * 0.05
+        tone = 0.03 * torch.sin(2 * math.pi * (1201.3 * t + 0.4 * torch.sin(
+            2 * math.pi * 0.05 * t))) + 0.02 * torch.sin(
+                2 * math.pi * 437.0 * t + 1)
+        tones, info = W.cancel_tones(noise + tone, self.RATE,
+                                     [1200.0, 437.5])
+
+        def db(v):
+            return 10 * math.log10(float((v ** 2).mean()) + 1e-20)
+        self.assertLess(db(noise + tone - tones - noise) - db(tone), -20.0)
+        self.assertAlmostEqual(info[0]["refined_hz"], 1201.3, delta=0.15)
+        rem, _ = W.cancel_tones(noise, self.RATE, [1200.0, 437.5])
+        self.assertLess(db(rem) - db(noise), -28.0)
+
+    def test_the_provenance_map_draws_each_tier_in_its_colour(self):
+        W = self.W
+        x = self.noise(12 * self.RATE, 51)
+        y = self.with_voices(x, [(3.0, 0.0, 150.0)])
+        hunt, path = self.hunt(y)
+        png = self.tmp / "prov.png"
+        res = W.provenance_op({"wav": os.fspath(path), "hunt": hunt,
+                               "png": os.fspath(png), "lanes": {
+                                   "measured": [[3.0, 5.5, 1.0]],
+                                   "cleaned": [[3.0, 5.5, 1.0]],
+                                   "audit": [[8.0, 9.0, 1.0]]}})
+        m = res["map"]
+        self.assertEqual(m["height"], m["lane_top"] + len(W.LANES)
+                         * (W.LANE_H + W.LANE_GAP))
+        self.assertEqual(res["drawn"]["measured"], 1)
+        self.assertEqual(res["drawn"]["invented"], 0)
+        raw = png.read_bytes()
+        self.assertEqual(raw[:8], b"\x89PNG\r\n\x1a\n")
+        w, h = struct.unpack(">II", raw[16:24])
+        self.assertEqual((w, h), (m["width"], m["height"]))
 
     def test_a_speakers_range_lowers_the_line(self):
         """Move 7: hunting one speaker's range (95-145 Hz, 22 pitches of
@@ -1354,6 +1714,152 @@ class SelfTrain(TempDirCase):
         # the engine's floor is the worker's
         self.assertEqual(self.S.MIN_NOISE_S, H.SELFTRAIN_MIN_NOISE_S)
 
+
+
+def _load_cv():
+    spec = importlib.util.spec_from_file_location(
+        "clearervoice_worker_under_test",
+        PACKAGE / "media" / "clearervoice_worker.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod._say = lambda _t: None
+    return mod
+
+
+@unittest.skipUnless(HAS_TORCH, "torch is not installed here (the worker's "
+                                "interpreter in ATK has it)")
+class ClearerVoicePort(TempDirCase):
+    """Move 7's ClearerVoice port with real torch, without the published
+    weights (they are fetched on Bill's machine, where every HARK run's
+    self-check proves the port on two clean phrases before using it)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import torch
+        cls.torch = torch
+        cls.C = _load_cv()
+
+    def test_the_port_is_mossformer2_ss_16k(self):
+        """55 735 410 parameters — MossFormer2's published size; its own
+        weights load back strictly, and a missing one is named."""
+        torch, C = self.torch, self.C
+        net = C._build()
+        self.assertEqual(sum(p.numel() for p in net.parameters()), 55735410)
+        sd = net.state_dict()
+        path = self.tmp / "w.pt"
+        torch.save({"model": {"module." + k: v for k, v in sd.items()}},
+                   path)
+        _net, n = C.load_model(os.fspath(path), "cpu")
+        self.assertEqual(n, 55735410)
+        broken = dict(sd)
+        broken.pop("mask_net.conv1d_out.weight")
+        torch.save(broken, path)
+        with self.assertRaises(ValueError) as cm:
+            C.load_model(os.fspath(path), "cpu")
+        self.assertIn("mask_net.conv1d_out.weight", str(cm.exception))
+
+    def test_the_target_follows_the_voice_move_2_pulled(self):
+        """Two streams, their order flipped part way: the stream
+        whose spectrum follows the steering voice is chosen per window."""
+        torch, C = self.torch, self.C
+        n = 5 * C.RATE                     # windows at 0, 1.5 and 3 s
+        t = torch.arange(n) / C.RATE
+        a = 0.1 * torch.sin(2 * math.pi * 150 * t) * (1 + torch.sin(
+            2 * math.pi * 3 * t))
+        b = 0.1 * torch.sin(2 * math.pi * 900 * t)
+        streams = torch.stack([a, b])
+        cut = int(3.25 * C.RATE)          # where two windows' kept parts meet
+        streams[:, cut:] = streams[:, cut:].flip(0)
+        starts = list(range(0, n - int(C.WINDOW_S * C.RATE) + 1,
+                            int(C.STRIDE_S * C.RATE)))
+        target, other, rows = C.choose(streams, a, starts)
+        self.assertGreater(float(torch.nn.functional.cosine_similarity(
+            target, a, dim=0)), 0.95)
+        self.assertEqual(len(rows), len(starts))
+        self.assertTrue(all(r["evidence"] is not None for r in rows))
+
+
+def _load_prior():
+    spec = importlib.util.spec_from_file_location(
+        "prior_worker_under_test", PACKAGE / "media" / "prior_worker.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod._say = lambda _t: None
+    return mod
+
+
+@unittest.skipUnless(HAS_TORCH, "torch is not installed here (the worker's "
+                                "interpreter in ATK has it)")
+class GenerativeLane(TempDirCase):
+    """Move 4's worker with real torch at toy scale: it trains, it guesses,
+    it maps its own uncertainty. A useful prior takes days on a GPU
+    (train_prior.bat); these only prove the machinery."""
+
+    @classmethod
+    def setUpClass(cls):
+        import torch
+        cls.torch = torch
+        cls.P = _load_prior()
+
+    def test_the_spectrum_round_trips_and_the_noise_model_fits(self):
+        torch, P = self.torch, self.P
+        x = torch.randn(32000, generator=torch.Generator().manual_seed(1))
+        X = P.stft(x)
+        self.assertTrue(torch.allclose(P.decompress(P.compress(X)), X,
+                                       atol=1e-4, rtol=1e-3))
+        self.assertTrue(torch.allclose(P.istft(X, x.numel()), x, atol=1e-4))
+        Pw = X.abs() ** 2 + 1e-12
+        g = torch.Generator().manual_seed(2)
+
+        def isd(V):
+            r = Pw / V
+            return float((r - r.log() - 1).mean())
+        W, H = P.nmf_is(Pw, 4, 1, gen=g)
+        first = isd(W @ H)
+        W, H = P.nmf_is(Pw, 4, 40, W=W, H=H)
+        self.assertLess(isd(W @ H), first)
+
+    def test_a_toy_prior_trains_and_guesses_with_its_uncertainty(self):
+        torch, P = self.torch, self.P
+        g = torch.Generator().manual_seed(3)
+        t = torch.arange(4 * P.RATE) / P.RATE
+        speechy = 0.2 * torch.sin(2 * math.pi * 150 * t) * (
+            1 + torch.sin(2 * math.pi * 4 * t))
+        shards = self.tmp / "shards"
+        shards.mkdir()
+        P._save_torch({"rate": P.RATE, "audio": speechy.half()},
+                      shards / "shard0000.pt")
+        prior = self.tmp / "prior.pt"
+        res = P.train_op({"shards": os.fspath(shards),
+                          "out": os.fspath(prior), "config": "tiny",
+                          "steps": 3, "batch": 2, "device": "cpu"})
+        self.assertEqual(res["steps"], 3)
+        res = P.train_op({"shards": os.fspath(shards),
+                          "out": os.fspath(prior), "config": "tiny",
+                          "steps": 2, "batch": 2, "device": "cpu"})
+        self.assertEqual(res["steps"], 5, "it resumes")
+        noisy = speechy[:2 * P.RATE] + 0.05 * torch.randn(2 * P.RATE,
+                                                          generator=g)
+        wav = self.tmp / "noisy.wav"
+        P.write_wav(wav, noisy, P.RATE)
+        out = {"mean": os.fspath(self.tmp / "mean.wav"),
+               "mean_b": os.fspath(self.tmp / "mean_b.wav"),
+               "png": os.fspath(self.tmp / "u.png")}
+        res = P.sample_op({"wav": os.fspath(wav), "device": "cpu",
+                           "priors": [{"name": "a", "path": os.fspath(prior)},
+                                      {"name": "b", "path": os.fspath(prior)}],
+                           "free": [[0.0, 0.3]], "samples": 2, "steps": 3,
+                           "em_rounds": 1, "outputs": out})
+        m, rate = P.read_wav(out["mean"])
+        self.assertEqual((m.numel(), rate), (noisy.numel(), P.RATE))
+        self.assertFalse(bool(torch.isnan(m).any()))
+        self.assertEqual(res["priors"][0]["samples"], 2)
+        self.assertIsNotNone(res["priors"][0]["spread_db_speech"])
+        self.assertIn("depends_cells", res["prior_swap"])
+        raw = Path(out["png"]).read_bytes()
+        self.assertEqual(raw[:8], b"\x89PNG\r\n\x1a\n")
+        info = P.info_op({"prior": os.fspath(prior)})
+        self.assertEqual((info["config"], info["step"]), ("tiny", 5))
 
 if __name__ == "__main__":
     unittest.main()
