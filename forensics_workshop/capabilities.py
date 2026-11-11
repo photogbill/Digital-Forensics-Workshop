@@ -438,6 +438,19 @@ _TABLE = (
      "roll-off, energy below 20 Hz), a linear map above 12 kHz, and bands "
      "out of hearing moved into it (single-sideband shift, slowed or sped-up "
      "copies — Measured). Not yet run against the real models."),
+    ("hark", "HARK — voices found by their pitch track, the file's own CEP, "
+     "an audit of every restoration (§15)", 3, "native",
+     "forensics_workshop.media.hark", "", "", "planned",
+     "Runs on a Restore Audio analysis and changes nothing (Measured): a "
+     "harmonic-summing pitch hunter with slope templates and Viterbi "
+     "track-before-detect, false alarms measured on the file's own noise "
+     "(phase-randomised surrogates); voice-like probes and real phrases "
+     "injected into the file's own noise for its detection curve and raw "
+     "intelligibility (ESTOI, after pystoi, MIT); every restoration output "
+     "and residual audited for voice removed, voice made and voice revealed. "
+     "media/hark_worker.py in its own process under the host's torch. "
+     "Measured on synthetic voice in white, pink, level-swinging and hummy "
+     "noise; not yet run on real recordings."),
     ("voiceprint", "Voice comparison — speaker embeddings, a probability only "
      "through a calibration (§13)", 3, "third-party",
      "forensics_workshop.media.voiceprint", "", "Apache-2.0", "planned",

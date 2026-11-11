@@ -2307,3 +2307,52 @@ reader's deleted-file content rests on the contiguous assumption every FAT
 tool makes. The registry's log replay disagrees with regipy's (ours yields
 hives hivex can walk; regipy's do not) and there is no third reader to
 settle it.
+
+
+## 15. HARK — voices found by their pitch track (Bill, 2026-11-10)
+
+Bill: *"something that is designed specifically to pull sounds and other
+noises to include speech from the noise using some form of advanced
+detection ... it must be a push button process entirely, easy for the
+operator."* Files only, no microphone array, no time limit.
+
+The plan, the research behind it, the build status and the measured
+results are in **[HARK_PLAN.md](HARK_PLAN.md)** — kept in its own file
+because it is long and will grow with each increment.
+
+**Built 2026-11-10 (increments 1, 2, 2b, 3 and 4):** `media/hark.py` and
+`media/hark_worker.py` — a pitch-track hunter whose false-alarm rate is
+measured on phase-randomised copies of the file's own noise (DETECTED: under
+once in ten hours; possible: under ten an hour); the file's own CEP from
+probes and clean phrases injected into its noise; **Move 2**, each DETECTED
+voice pulled out along its refined pitch track in warped time (VOICE and
+LIFT, tier Cleaned, in the restoration results like any option);
+**increment 2b**, every restoration chain run on a probe made of the file's
+own noise with clean phrases hidden in it, scored by ESTOI at the level of
+the file's voices, the best for this file named; and an audit of every
+restoration output (voice REMOVED — the output lost it, not merely turned
+its phase — voice MADE that the input lacks, a possible voice REVEALED).
+CLI `hark`, `hark-list`, `hark-export`; a HARK section on ATK's Restore
+Audio page. Measured results are in HARK_PLAN.md.
+
+**Built 2026-11-11 (Moves 3, 7 and 8):** **Move 3**, GTCRN (MIT, ported
+to torch in `media/selftrain_worker.py`) fine-tuned on the file alone —
+the published model's output as teacher, remixed with the file's own noise
+— tier Inferred, scored beside GTCRN as published (a large win on engine
+noise, a small loss on radio static and white noise — so increment 2b
+chooses per file); on Overnight and Full day also one trained from nothing
+(M4). **Move 7**, the speaker loop's first half: the strongest voice's pitch
+range learnt from what was DETECTED and the file hunted again in that range
+only, a lower line at the same measured false-alarm rate, kept only when
+the same test voices are found quieter or more voice is found. **Move 8**,
+the census: what pulses (DEMON on band envelopes, with its own false-alarm
+rate), what hums (steady pitch tracks named machines, left out of Move 2,
+counted as noise by Move 3, and cancelled along their pitch as a Cleaned
+restoration result), and the analysis's steady tones. A hunter fix: a
+drifting whistle no longer passes as a voice.
+
+**Not built:** posterior sampling (Move 4 — it needs a speech prior trained
+on your GPU), the speaker loop's second half (ClearerVoice steered by the
+speaker's own profile), the mad moves other than M4, the full FRESH filter's
+cross-harmonic coherence. Nothing is measured on real recordings of yours
+yet.

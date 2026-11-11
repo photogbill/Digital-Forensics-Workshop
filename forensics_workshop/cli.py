@@ -48,6 +48,9 @@
     python -m forensics_workshop restore-run     CASE RUN_ID --examiner NAME --ffmpeg EXE --python EXE --scratch DIR --models-root DIR [--option ID]... [--all] [--force] [--device auto] [--deepfilter EXE] [--rnnoise-model FILE]
     python -m forensics_workshop restore-list    CASE --examiner NAME [--id RUN_ID]
     python -m forensics_workshop restore-export  CASE RUN_ID FILE --examiner NAME
+    python -m forensics_workshop hark            CASE RUN_ID --examiner NAME --python EXE --scratch DIR [--budget quick|thorough|overnight|day] [--ffmpeg EXE --phrases DIR] [--models-root DIR --deepfilter EXE --rnnoise-model FILE --gtcrn-weights FILE] [--resume HARK_ID] [--device auto]
+    python -m forensics_workshop hark-list       CASE RUN_ID --examiner NAME [--id HARK_ID]
+    python -m forensics_workshop hark-export     CASE RUN_ID HARK_ID --examiner NAME
   drive acquisition (2026-10-29) — image a drive to E01 or RAW, verified
     python -m forensics_workshop drives
     python -m forensics_workshop corpus      CASE E001 --examiner NAME [--families image,video,document,text,email] [--deleted] [--path TEXT]
@@ -90,6 +93,7 @@ from .artefacts import browser as _browser
 from .artefacts import mobile as _mobile
 from .artefacts import query as _query
 from .media import restore as _restore
+from .media import hark as _hark
 from .media import voiceprint as _voice
 from .case import Case
 from .errors import ForensicsError
@@ -803,6 +807,64 @@ def cmd_restore_export(args) -> int:
     return 0
 
 
+def _print_hark(result: dict) -> None:
+    choice = result.get("choice") or {}
+    _print({k: v for k, v in result.items()
+            if k not in ("hunt", "calibrate", "extract", "score", "audit",
+                         "verdict", "choice")}
+           | {"segments": _hark.segment_rows(result),
+              "scored": [{k: r[k] for k in ("id", "label", "tier", "estoi",
+                                            "gain", "noise_left_db")}
+                         for r in choice.get("rows") or []]})
+    for line in result.get("verdict") or []:
+        print(f"  {line}", file=sys.stderr)
+    for f in result.get("flags") or []:
+        print(f"  [{f['kind']}] {f['text']}", file=sys.stderr)
+
+
+def cmd_hark(args) -> int:
+    case = _open(args)
+    try:
+        rep = _restore.load_run(case, args.run_id)
+        secs = float((rep.get("analysis") or {}).get("duration_s") or 0.0)
+        print(f"  HARK {args.budget}: roughly "
+              f"{_hark.estimate_minutes(args.budget, secs):g} min on a "
+              "two-core CPU (a GPU is faster)", file=sys.stderr)
+    except Exception:                                     # noqa: BLE001
+        pass
+    result = _hark.run(case, args.run_id, budget_name=args.budget,
+                       python=args.python or None, scratch=args.scratch,
+                       ffmpeg=args.ffmpeg or None,
+                       phrases=args.phrases or None, device=args.device,
+                       resume=args.resume,
+                       models_root=args.models_root or None,
+                       deepfilter=args.deepfilter or None,
+                       rnnoise_model=args.rnnoise_model or None,
+                       gtcrn_weights=args.gtcrn_weights or None,
+                       progress=_progress)
+    _print_hark(result)
+    return 0
+
+
+def cmd_hark_list(args) -> int:
+    case = _open(args)
+    if args.id:
+        _print_hark(_hark.load(case, args.run_id, args.id))
+        return 0
+    rows = _hark.list_harks(case, args.run_id)
+    for r in rows:
+        print(f"{r['hark_id']:34} {r['budget']:10} "
+              f"{','.join(r['stages']) or '-':24} "
+              f"{'finished' if r['finished'] else 'not finished'}")
+    print(f"\n{len(rows)} HARK run(s)")
+    return 0
+
+
+def cmd_hark_export(args) -> int:
+    _print(_hark.export_map(_open(args), args.run_id, args.hark_id))
+    return 0
+
+
 def cmd_volume(args) -> int:
     _print(blocker.volume_state(args.path).as_dict())
     return 0
@@ -1140,6 +1202,42 @@ def build_parser() -> argparse.ArgumentParser:
                    "copy one restoration output into the case's exports")
     rx.add_argument("run_id")
     rx.add_argument("file")
+
+    hk = with_case("hark", cmd_hark,
+                   "HARK: find voices by their pitch track, measure this "
+                   "file's CEP, audit its restorations (changes nothing)")
+    hk.add_argument("run_id", help="a Restore Audio analysis (restore-list)")
+    hk.add_argument("--budget", default="quick", choices=list(_hark.BUDGETS))
+    hk.add_argument("--python", default="", help="a Python with torch")
+    hk.add_argument("--scratch", required=True,
+                    help="the worker's temp and cache folder, outside every "
+                         "case")
+    hk.add_argument("--ffmpeg", default="",
+                    help="FFmpeg, to copy clean phrases in for calibration")
+    hk.add_argument("--phrases", default="",
+                    help="a folder of clean speech (LibriSpeech test-clean)")
+    hk.add_argument("--resume", default="",
+                    help="a HARK id: keep its finished stages")
+    hk.add_argument("--device", default="auto",
+                    choices=["auto", "cuda", "cpu"])
+    hk.add_argument("--models-root", default="",
+                    help="SpeechBrain's models folder, to score the "
+                         "restorations that use them on the probe")
+    hk.add_argument("--deepfilter", default="",
+                    help="deep-filter.exe, to score DeepFilterNet")
+    hk.add_argument("--rnnoise-model", default="",
+                    help="RNNoise's model file, to score RNNoise")
+    hk.add_argument("--gtcrn-weights", default="",
+                    help="GTCRN's published weights, for the denoiser that "
+                         "trains on this file (Move 3)")
+    hl = with_case("hark-list", cmd_hark_list,
+                   "a restoration run's HARK runs")
+    hl.add_argument("run_id")
+    hl.add_argument("--id", default="")
+    hx = with_case("hark-export", cmd_hark_export,
+                   "copy a HARK run's map into the case's exports")
+    hx.add_argument("run_id")
+    hx.add_argument("hark_id")
 
     cp = with_case("corpus", cmd_corpus, "what a model hunt would look at: "
                    "images, video, documents, text, email", evidence=True)

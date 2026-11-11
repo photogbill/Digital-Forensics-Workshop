@@ -1,8 +1,9 @@
 # Notices — media recovery (FORENSICS_PLAN §12.9, §12.10, §13)
 
-Nothing below is bundled in this repository. The engine runs these
-components as **separate processes** with weights the operator downloads;
-these notices travel with the code that drives them.
+Nothing below is bundled in this repository except one port of code,
+GTCRN's network (below). The engine runs these components as **separate
+processes** with weights the operator downloads; these notices travel with
+the code that drives them.
 
 **SAM Audio and audio.cpp were removed on 2026-10-29** (Bill's decision): no
 code here runs them any longer, so their notices are gone with them. A case
@@ -74,3 +75,21 @@ models are not creative work and **not subject to copyright**.
 SHA-256 is `70bb6685eb0c2a1d18e2918dca3fbfbd39317010b1802eb1b6ea73a92f3fdec0`,
 with that README beside it. **Made for speech** — the option and its outputs
 say so.
+
+## GTCRN — Rong Xiaobin, MIT
+
+HARK's denoiser that trains on the file itself (Move 3,
+`selftrain_worker.py`) is **GTCRN** (<https://github.com/Xiaobin-Rong/gtcrn>,
+"GTCRN: A Speech Enhancement Model Requiring Ultralow Computational
+Resources", X. Rong, T. Sun, X. Zhang, Y. Hu, C. Zhu, J. Lu, ICASSP 2024).
+Its network is **ported** into `selftrain_worker.py` — the same layers and
+parameter names, numpy and einops replaced by torch — under the MIT licence,
+"Copyright (c) 2024 Rong Xiaobin", whose full text is at the top of that
+file. ATK's `get_speechbrain.bat` downloads the published DNS3 weights,
+`checkpoints/model_trained_on_dns3.tar` at commit
+`502ebfab64da7c4a9af78dcb9c6ceef1ebb01c73`, into `models\gtcrn\`, refuses
+them unless their SHA-256 is
+`a630d992cf792daf4ce2bb5bcf9c4d389f740a8f09c6e0971184697fe6371b79`, and
+saves the licence text beside them. Weights HARK trains on a case's file
+stay in that case.
+

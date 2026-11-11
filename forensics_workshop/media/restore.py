@@ -1507,10 +1507,16 @@ def _run_option(case, run_dir: Path, recipe: dict, opt: dict, working,
                 w_sha: str, upstream_tier: str, report: dict, *, ffmpeg,
                 models_root, python, worker, scratch, device, force, say,
                 heartbeat, should_cancel, deepfilter=None,
-                rnnoise_model=None) -> dict:
+                rnnoise_model=None, folder_parts=None,
+                record: bool = True) -> dict:
     """One option: its chain from the working copy (analysis.wav, or the
     combined channels), aligned to and subtracted from its reference — or,
-    for a band moved into hearing, cut to its length with no residual."""
+    for a band moved into hearing, cut to its length with no residual.
+
+    `folder_parts`: where under the case its folder goes, when not the
+    run's own (HARK scores every chain on a probe in its own folder);
+    `record=False`: no `media.restore.derived` custody event (HARK records
+    the scoring as its own)."""
     working_rel = Path(working).name
     duration = float(report["analysis"].get("duration_s", 0.0) or 0.0)
     work_rate = int(report["analysis"].get("rate") or 0) or None
@@ -1519,8 +1525,9 @@ def _run_option(case, run_dir: Path, recipe: dict, opt: dict, working,
     folder_name = f"opt-{opt['id']}"
     if force and (run_dir / folder_name).exists():
         folder_name = f"opt-{opt['id']}-{_vp._new_id('x')[2:]}"
-    folder = _case.make_case_dirs(case.root, RESTORE_DIR, run_dir.name,
-                                  folder_name)
+    folder = _case.make_case_dirs(
+        case.root, *(folder_parts or (RESTORE_DIR, run_dir.name)),
+        folder_name)
     rel = Path(folder_name)
     with _lab._case_log(case, folder / "restore.log") as log:
         current, current_rel, current_sha = working, working_rel, w_sha
@@ -1819,6 +1826,8 @@ def _run_option(case, run_dir: Path, recipe: dict, opt: dict, working,
         result["copy"] = dict(copy["info"], stem=opt.get("copy_stem", ""))
     if opt.get("speech_only"):
         result["speech_only"] = True
+    if not record:
+        return result
     case.custody.record(
         "media.restore.derived", actor=case.actor(), target=run_dir.name,
         hashes={e["file"]: e["sha256"] for e in entries} | (

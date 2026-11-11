@@ -9,6 +9,7 @@ same subprocess path the engine uses for the real ones (an argv prefix
 
 from __future__ import annotations
 
+import json
 import math
 import struct
 import sys
@@ -511,3 +512,249 @@ def install_ffmpeg(folder) -> list:
     ff = root / "fake_ffmpeg.py"
     ff.write_text(FAKE_FFMPEG, encoding="utf-8")
     return [sys.executable, str(ff)]
+
+
+# ---------------------------------------------------------------------------
+# HARK (FORENSICS_PLAN §15): a fake worker for the engine's and ATK's tests
+# ---------------------------------------------------------------------------
+
+# A stand-in for hark_worker.py: no torch. It answers each op from what the
+# test planted beside it (fake_hark_plan.json), writes the map it was asked
+# for, counts its runs, and fails an op named in "fail".
+FAKE_HARK_WORKER = r'''
+import json, os, sys
+HERE = os.path.dirname(os.path.abspath(__file__))
+plan = json.load(open(os.path.join(HERE, "fake_hark_plan.json"), encoding="utf-8"))
+req = json.load(open(sys.argv[1], encoding="utf-8"))
+op = req["op"]
+print("fake hark worker: " + op, flush=True)
+log = os.path.join(HERE, "fake_hark_calls.txt")
+open(log, "a", encoding="utf-8").write(op + "\n")
+if op in plan.get("fail", []):
+    print("planted failure in " + op, flush=True)
+    sys.exit(3)
+PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02"
+       b"\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01"
+       b"\x01\x00\xc9\xfe\x92\xef\x00\x00\x00\x00IEND\xaeB`\x82")
+out = dict(plan.get(op) or {})
+def copy_wav(src, dst):
+    data = open(src, "rb").read()
+    open(dst + ".part", "wb").write(data)
+    os.replace(dst + ".part", dst)
+if op == "hunt" and req.get("png"):
+    open(req["png"], "wb").write(PNG)
+prm = req.get("params") or {}
+if op == "hunt" and prm.get("f0_min_hz") is not None:
+    # Move 7's narrowed hunt: the planted one, its grid the range asked
+    out = dict(plan.get("hunt_narrow") or out)
+    out["grid"] = dict(out.get("grid") or {}, f0_min_hz=prm["f0_min_hz"],
+                       f0_max_hz=prm["f0_max_hz"])
+if op == "calibrate" and prm.get("probe_f0_hz"):
+    narrowed = float(((req.get("hunt") or {}).get("grid") or {})
+                     .get("f0_min_hz") or 60.0) > 60.0
+    out = dict(plan.get("calibrate_narrow" if narrowed else
+                        "calibrate_broad") or out)
+    out["probe_f0_hz"] = prm["probe_f0_hz"]
+    out["free_given"] = req.get("free")
+if op == "calibrate":
+    out["phrases_seen"] = len(req.get("phrases") or [])
+if op == "extract":
+    # the voice and the lift: copies of the input (same rate and length)
+    for key in ("voice", "lift"):
+        if (req.get("outputs") or {}).get(key):
+            copy_wav(req["wav"], req["outputs"][key])
+    out.setdefault("rehunt", bool(req.get("rehunt")))
+if op == "census":
+    # the recording without its machines, and the machine: copies of the input
+    for key in ("without", "machine"):
+        if (req.get("outputs") or {}).get(key):
+            copy_wav(req["wav"], req["outputs"][key])
+    out["machines"] = [{"track": m.get("track", 1), "start_s": m["start_s"],
+                        "end_s": m["end_s"],
+                        "f0_median_hz": m.get("f0_median_hz", 0.0),
+                        "refined_pct": 0.1}
+                       for m in req.get("machines") or []] \
+        if req.get("outputs") else []
+    out["machines_given"] = len(req.get("machines") or [])
+    out.setdefault("versions", {"torch": "fake", "device": "cpu"})
+if op == "probe":
+    for key in ("probe", "clean"):
+        copy_wav(req["wav"], req["outputs"][key])
+    out["phrases_given"] = len(req.get("phrases") or [])
+if op == "score":
+    planted = plan.get("scores") or {}
+    default = plan.get("default_score")
+    ids = ["unprocessed"] + [o["id"] for o in req.get("outputs") or []]
+    for o in req.get("outputs") or []:
+        for path in o["paths"]:
+            if not os.path.isfile(path):
+                print("missing output " + path, flush=True)
+                sys.exit(4)
+    out = {"scores": {i: planted.get(i, default) for i in ids}, "gaps": 2}
+if op == "audit":
+    flags = plan.get("audit_flags", {})
+    out = {"targets": [dict({"id": t["id"], "removed": [], "removed_possible": [],
+                             "made": [], "revealed": [], "supported": 1,
+                             "residual_tracks": 0, "output_tracks": 1},
+                            **flags.get(t["id"].split(":")[0], {}),
+                            had_residual=bool(t.get("residual")))
+                       for t in req["targets"]]}
+out["op"] = op
+out["elapsed_s"] = 0.01
+json.dump(out, open(sys.argv[2], "w", encoding="utf-8"))
+'''
+
+# A stand-in for selftrain_worker.py: no torch. "selftrain" copies the 16 kHz
+# input to the output and writes a small model file; "apply" copies its
+# input. It logs its ops beside the HARK fake's (fake_selftrain_calls.txt)
+# and fails an op named in fake_selftrain_fail.txt.
+FAKE_SELFTRAIN_WORKER = r'''
+import json, os, sys
+HERE = os.path.dirname(os.path.abspath(__file__))
+req = json.load(open(sys.argv[1], encoding="utf-8"))
+op = req["op"]
+print("fake selftrain worker: " + op, flush=True)
+open(os.path.join(HERE, "fake_selftrain_calls.txt"), "a",
+     encoding="utf-8").write(op + ":" + ("finetune" if req.get("weights") else
+                                          "scratch") + "\n")
+fail = os.path.join(HERE, "fake_selftrain_fail.txt")
+if os.path.exists(fail) and op in open(fail).read().split():
+    print("planted failure in " + op, flush=True)
+    sys.exit(3)
+def copy_wav(src, dst):
+    data = open(src, "rb").read()
+    open(dst + ".part", "wb").write(data)
+    os.replace(dst + ".part", dst)
+if op == "selftrain":
+    copy_wav(req["wav"], req["outputs"]["output"])
+    if req["outputs"].get("base"):
+        copy_wav(req["wav"], req["outputs"]["base"])
+    open(req["outputs"]["model"] + ".part", "wb").write(b"fake gtcrn weights")
+    os.replace(req["outputs"]["model"] + ".part", req["outputs"]["model"])
+    out = {"mode": "finetune" if req.get("weights") else "scratch",
+           "steps": 120, "best_step": 100, "check_first": 9.5,
+           "check_best": 7.25, "improved": True, "curve": [[0, 9.5],
+                                                          [100, 7.25]],
+           "train_s": 1.0, "noise_s": 2.5, "rate": 16000,
+           "free_seen": req.get("free"), "teacher": bool(req.get("teacher")),
+           "versions": {"torch": "fake", "device": "cpu"}}
+elif op == "apply":
+    copy_wav(req["wav"], req["output"])
+    out = {"rate": 16000, "versions": {"torch": "fake", "device": "cpu"}}
+else:
+    sys.exit(2)
+out["op"] = op
+out["elapsed_s"] = 0.01
+json.dump(out, open(sys.argv[2], "w", encoding="utf-8"))
+'''
+
+
+def install_selftrain_worker(folder, fail=()) -> list:
+    root = Path(folder)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "fake_selftrain_worker.py").write_text(FAKE_SELFTRAIN_WORKER,
+                                                   encoding="utf-8")
+    calls = root / "fake_selftrain_calls.txt"
+    if calls.exists():
+        calls.unlink()
+    flag = root / "fake_selftrain_fail.txt"
+    if fail:
+        flag.write_text(" ".join(fail), encoding="utf-8")
+    elif flag.exists():
+        flag.unlink()
+    return [sys.executable, str(root / "fake_selftrain_worker.py")]
+
+
+def selftrain_calls(folder) -> list[str]:
+    path = Path(folder) / "fake_selftrain_calls.txt"
+    return path.read_text(encoding="utf-8").split() if path.exists() else []
+
+
+def fake_gtcrn_weights(folder) -> Path:
+    """A stand-in for GTCRN's published weights (the fake worker only
+    checks a path was given)."""
+    root = Path(folder)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "model_trained_on_dns3.tar"
+    path.write_bytes(b"GTCRN DNS3 weights (test stand-in)\n")
+    return path
+
+
+HARK_SEG = {"track": 1, "start_s": 1.2, "end_s": 2.6, "frames": 140,
+            "voiced_frames": 120, "parts": 2, "f0_median_hz": 132.0,
+            "f0_min_hz": 118.0, "f0_max_hz": 151.0, "f0_hz": [132.0] * 140,
+            "score": 210.0, "fa_per_hour": 0.0, "fa_extrapolated": True,
+            "status": "detected", "level_est_db": -7.0}
+
+HARK_PLAN = {
+    "hunt": {"rate": 16000, "duration_s": 3.0, "frames": 290,
+             "device": "cpu", "grid": {"steps_per_octave": 36, "top_hz": 4000},
+             "slopes": [0.0], "log_noise": [0.0] * 8,
+             "null": {"mu": [0.0], "sd": [1.0], "sd_slope": [[1.0]],
+                      "scores": [10.0, 20.0], "hours": 0.25, "rho": 2.5},
+             "thresholds": {"detect_score": 120.0, "possible_score": 60.0,
+                            "detect_fa_per_hour": 0.1,
+                            "possible_fa_per_hour": 10.0},
+             "segments": [HARK_SEG],
+             "tracks": [{"track": 1, "detected_s": 1.4, "possible_s": 0.0,
+                         "f0_median_hz": 132.0, "f0_p10_hz": 120.0,
+                         "f0_p90_hz": 148.0}],
+             "free": [[0.0, 1.0]], "surrogates": 4, "excised_s": 1.7,
+             "map": {"width": 1, "height": 1, "top_hz": 2000.0,
+                     "scale": "linear"}},
+    "calibrate": {"levels": [
+        {"level_db": 0.0, "n": 4, "detected": 4, "possible": 4, "pd": 1.0,
+         "pd_synthetic": 1.0, "pd_phrase": 1.0, "estoi_raw": 0.62},
+        {"level_db": -10.0, "n": 4, "detected": 2, "possible": 3, "pd": 0.5,
+         "pd_synthetic": 0.5, "pd_phrase": 0.5, "estoi_raw": 0.31}],
+        "pd50_db": -10.0, "pd90_db": -2.0, "estoi_half_db": -3.5,
+        "level_offset_db": -1.0, "level_pairs": 5, "injections": 8},
+    "audit_flags": {},
+    "extract": {"rate": 16000, "voiced_s": 1.3, "top_hz": 4000.0,
+                "cycles": 6.0, "tracks": [1],
+                "runs": [{"track": 1, "start_s": 1.2, "end_s": 2.5,
+                          "f0_median_hz": 131.0, "refined_pct": 0.8}],
+                "versions": {"torch": "fake", "device": "cpu"}},
+    "census": {"modulated": {"items": [
+        {"kind": "pulsing", "rate_hz": 7.5, "start_s": 0.0, "end_s": 3.0,
+         "windows": 1, "score": 9.0, "fa_per_hour": 0.001,
+         "fa_extrapolated": False, "status": "detected",
+         "multiples": [1, 2]}],
+        "bands_hz": [100.0, 8000.0], "null_hours": 0.01, "windows": 1,
+        "rates_tried": 400}, "rate": 16000},
+    "probe": {"rate": 16000, "duration_s": 3.0, "levels": [0.0, -10.0],
+              "per_level": 1, "noise_from_file_s": 1.0,
+              "noise_surrogate_s": 2.0,
+              "phrases": [{"n": 1, "level_db": 0.0, "phrase": 0,
+                           "start_s": 0.5, "end_s": 1.4},
+                          {"n": 2, "level_db": -10.0, "phrase": 1,
+                           "start_s": 1.8, "end_s": 2.7}]},
+    "scores": {
+        "unprocessed": {"noise_left_db": 0.0, "by_level": [
+            {"level_db": 0.0, "n": 1, "estoi": 0.40, "si_snr_db": -1.0},
+            {"level_db": -10.0, "n": 1, "estoi": 0.15, "si_snr_db": -11.0}]},
+        "hark": {"noise_left_db": -10.0, "by_level": [
+            {"level_db": 0.0, "n": 1, "estoi": 0.50, "si_snr_db": 6.0},
+            {"level_db": -10.0, "n": 1, "estoi": 0.22, "si_snr_db": -2.0}]}},
+    "default_score": {"noise_left_db": -6.0, "by_level": [
+        {"level_db": 0.0, "n": 1, "estoi": 0.42, "si_snr_db": 2.0},
+        {"level_db": -10.0, "n": 1, "estoi": 0.16, "si_snr_db": -8.0}]},
+}
+
+
+def install_hark_worker(folder, plan=None) -> list:
+    root = Path(folder)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "fake_hark_worker.py").write_text(FAKE_HARK_WORKER,
+                                              encoding="utf-8")
+    (root / "fake_hark_plan.json").write_text(json.dumps(plan or HARK_PLAN),
+                                              encoding="utf-8")
+    calls = root / "fake_hark_calls.txt"
+    if calls.exists():
+        calls.unlink()
+    return [sys.executable, str(root / "fake_hark_worker.py")]
+
+
+def hark_calls(folder) -> list[str]:
+    path = Path(folder) / "fake_hark_calls.txt"
+    return path.read_text(encoding="utf-8").split() if path.exists() else []

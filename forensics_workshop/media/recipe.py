@@ -86,6 +86,16 @@ TOOL_TIERS = {
     "forensics_workshop restore_worker channel combining": "recovered",
     "forensics_workshop restore_worker repeat averaging": "recovered",
     "forensics_workshop restore_worker salience map": "measured",
+    # HARK (FORENSICS_PLAN §15, HARK_PLAN.md): the pitch-track hunter only
+    # measures — its map shows where voiced sound is; nothing is changed.
+    "forensics_workshop hark_worker pitch-track hunter": "measured",
+    "forensics_workshop hark_worker harmonic extraction": "cleaned",
+    "forensics_workshop hark_worker probe": "measured",
+    "forensics_workshop hark_worker machine cancellation": "cleaned",
+    "forensics_workshop selftrain_worker GTCRN trained on this file":
+        "inferred",
+    "forensics_workshop selftrain_worker GTCRN published weights":
+        "inferred",
     "forensics_workshop restore_worker salience mask": "cleaned",
     "forensics_workshop restore_worker repeating-pattern separation":
         "cleaned",
